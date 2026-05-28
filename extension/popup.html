@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Jira Time Helper</title>
+  <style>
+    :root {
+      --bg:                #0c1020;
+      --surface:           #141d33;
+      --header:            #1a2540;
+      --border:            #2a3a60;
+      --border-focus:      #3b6fd4;
+      --text:              #c8d8f0;
+      --text-muted:        #5a7aaa;
+      --text-dim:          #3d5080;
+      --text-placeholder:  #2e4060;
+      --ai-bg:             #0f1d38;
+      --ai-border:         #2a4a80;
+      --ai-border-hover:   #5b9cf6;
+      --ai-text:           #a8d4ff;
+      --ai-loading:        #3d5a80;
+      --shimmer-1:         #1a2d50;
+      --shimmer-2:         #243a66;
+      --action:            #1e2d4a;
+      --action-hover:      #243560;
+      --action-text:       #7090c0;
+      --action-text-hover: #a0b8e0;
+      --badge-bg:          #1a3060;
+      --badge-text:        #5b9cf6;
+      --key-text:          #5b9cf6;
+      --model-active:      #1a3060;
+      --model-active-border:#3b6fd4;
+      --model-active-text: #a0c8ff;
+      --section-border:    #1e2d4a;
+      --spinner-border:    #2a3a60;
+      --spinner-top:       #5b9cf6;
+      --warn-bg:           #1e2800;
+      --warn-border:       #4a5e00;
+      --warn-text:         #b0c040;
+      --warn-strong:       #d4e060;
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg:                #f0f4f8;
+        --surface:           #ffffff;
+        --header:            #e4ecf7;
+        --border:            #c4d0e8;
+        --border-focus:      #2563eb;
+        --text:              #1a2540;
+        --text-muted:        #4a5e8a;
+        --text-dim:          #7080a0;
+        --text-placeholder:  #a0b0d0;
+        --ai-bg:             #edf4ff;
+        --ai-border:         #9ab4e0;
+        --ai-border-hover:   #2563eb;
+        --ai-text:           #0f2050;
+        --ai-loading:        #6080b0;
+        --shimmer-1:         #c8d8f0;
+        --shimmer-2:         #d8e8ff;
+        --action:            #e0eaf8;
+        --action-hover:      #ccd8f0;
+        --action-text:       #4a5e8a;
+        --action-text-hover: #1a2540;
+        --badge-bg:          #dce8ff;
+        --badge-text:        #1a40a0;
+        --key-text:          #1a40a0;
+        --model-active:      #dce8ff;
+        --model-active-border:#2563eb;
+        --model-active-text: #0f1a50;
+        --section-border:    #c4d0e8;
+        --spinner-border:    #c4d0e8;
+        --spinner-top:       #2563eb;
+        --warn-bg:           #fffbe6;
+        --warn-border:       #c09000;
+        --warn-text:         #7a5f00;
+        --warn-strong:       #4a3800;
+      }
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      width: 400px;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    header {
+      background: var(--header);
+      padding: 12px 16px;
+      display: flex; align-items: center; justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+    }
+    header .left { display: flex; align-items: center; gap: 8px; }
+    header h1 { font-size: 13px; font-weight: 600; color: var(--text-muted); letter-spacing: 0.4px; }
+    #btn-settings {
+      background: none; border: none; cursor: pointer;
+      font-size: 18px; letter-spacing: 2px; color: var(--text-dim); padding: 4px 2px;
+      border-radius: 4px; transition: color 0.15s; line-height: 1;
+    }
+    #btn-settings:hover { color: var(--text-muted); }
+
+    .panel { padding: 14px 16px; display: none; }
+    .panel.active { display: block; }
+
+    /* ── Model picker ── */
+    .model-picker { display: flex; gap: 6px; margin-bottom: 14px; }
+    .model-btn {
+      flex: 1; padding: 7px 10px; border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text-muted);
+      font-size: 11px; font-weight: 600; cursor: pointer;
+      text-align: center; transition: all 0.15s; letter-spacing: 0.3px;
+    }
+    .model-btn:hover { border-color: var(--border-focus); color: var(--text); }
+    .model-btn.active {
+      background: var(--model-active);
+      border-color: var(--model-active-border);
+      color: var(--model-active-text);
+    }
+    .model-btn .model-icon { font-size: 14px; display: block; margin-bottom: 2px; }
+
+    /* ── Settings fields ── */
+    .settings-label {
+      font-size: 10px; font-weight: 700; letter-spacing: 1px;
+      text-transform: uppercase; color: var(--text-muted);
+      margin-bottom: 6px; display: block;
+    }
+    .key-row { display: flex; gap: 8px; align-items: center; }
+    .key-input {
+      flex: 1; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 6px; padding: 8px 10px; font-size: 12px;
+      color: var(--text); font-family: monospace; outline: none;
+    }
+    .key-input:focus { border-color: var(--border-focus); }
+    .key-input::placeholder { color: var(--text-placeholder); }
+    .save-btn {
+      padding: 8px 14px; background: #2563eb; color: #fff;
+      border: none; border-radius: 6px; font-size: 12px;
+      font-weight: 600; cursor: pointer; white-space: nowrap;
+    }
+    .save-btn:hover { background: #3b74f0; }
+    .save-btn.saved { background: #16a34a; }
+    .save-btn.error-state { background: #991b1b; }
+    .settings-hint {
+      margin-top: 8px; font-size: 11px; color: var(--text-dim); line-height: 1.5;
+    }
+    .settings-hint a { color: var(--key-text); text-decoration: none; }
+    .settings-hint a:hover { text-decoration: underline; }
+
+    .key-section { display: none; }
+    .key-section.active { display: block; }
+
+    /* ── Main panel ── */
+    .field { margin-bottom: 11px; }
+    .field label {
+      display: block; font-size: 10px; font-weight: 700;
+      letter-spacing: 1px; text-transform: uppercase;
+      color: var(--text-muted); margin-bottom: 4px;
+    }
+    .value {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 6px; padding: 8px 10px; font-size: 13px;
+      line-height: 1.5; color: var(--text); min-height: 34px;
+      white-space: pre-wrap; word-break: break-word;
+      max-height: 110px; overflow-y: auto;
+    }
+    .value.key-value {
+      font-family: monospace; font-size: 14px;
+      font-weight: 700; color: var(--key-text);
+    }
+    .value.empty { color: var(--text-dim); font-style: italic; font-size: 12px; }
+
+    .ai-section {
+      margin-top: 14px;
+      border-top: 1px solid var(--section-border);
+      padding-top: 14px;
+    }
+    .ai-label {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 10px; font-weight: 700; letter-spacing: 1px;
+      text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px;
+    }
+    .ai-label .badge {
+      background: var(--badge-bg); color: var(--badge-text);
+      font-size: 9px; padding: 1px 6px; border-radius: 20px; letter-spacing: 0.5px;
+    }
+    .ai-result {
+      background: var(--ai-bg); border: 1px solid var(--ai-border);
+      border-radius: 6px; padding: 10px 12px;
+      font-size: 14px; font-weight: 500; color: var(--ai-text);
+      line-height: 1.5; min-height: 44px;
+      transition: border-color 0.15s;
+      outline: none; cursor: text;
+    }
+    .ai-result:hover { border-color: var(--ai-border-hover); }
+    .ai-result:focus { border-color: var(--border-focus); }
+    .ai-result.loading-state {
+      color: var(--ai-loading); font-style: italic; font-size: 13px; cursor: default;
+    }
+    .ai-result.loading-state:hover,
+    .ai-result.loading-state:focus { border-color: var(--ai-border); outline: none; }
+    .ai-result.error-state {
+      color: #e05555; font-size: 12px; font-style: italic; cursor: default;
+    }
+    .ai-result.error-state:hover,
+    .ai-result.error-state:focus { border-color: var(--ai-border); outline: none; }
+
+    .shimmer {
+      display: inline-block; width: 70%; height: 14px; border-radius: 4px;
+      background: linear-gradient(90deg, var(--shimmer-1) 25%, var(--shimmer-2) 50%, var(--shimmer-1) 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.2s infinite; vertical-align: middle;
+    }
+    @keyframes shimmer { to { background-position: -200% 0; } }
+
+    .actions { display: flex; gap: 8px; margin-top: 12px; }
+    button.action {
+      flex: 1; padding: 9px 12px; border: none; border-radius: 6px;
+      font-size: 12px; font-weight: 600; cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+    }
+    button.action:active { transform: scale(0.97); }
+    button.action:disabled { opacity: 0.35; cursor: not-allowed; }
+    button.action:disabled:active { transform: none; }
+    #btn-copy-ai { background: #2563eb; color: #fff; }
+    #btn-copy-ai:not(:disabled):hover { background: #3b74f0; }
+    #btn-copy-ai.copied { background: #16a34a; }
+    #btn-copy-raw { background: var(--action); color: var(--action-text); font-size: 11px; }
+    #btn-copy-raw:hover { background: var(--action-hover); color: var(--action-text-hover); }
+    #btn-refresh {
+      flex: 0 0 auto; width: 40px; background: var(--action);
+      color: var(--action-text); font-size: 16px; padding: 9px;
+      border: none; border-radius: 6px; cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    #btn-refresh:hover { background: var(--action-hover); color: var(--action-text-hover); }
+    #btn-refresh:disabled { opacity: 0.35; cursor: not-allowed; }
+
+    .status-bar {
+      font-size: 11px; text-align: center;
+      color: var(--text-dim); padding: 7px 0 2px;
+    }
+    .status-bar.error { color: #e05555; }
+    .status-bar.success { color: #38b06a; }
+
+    #loading {
+      display: flex; align-items: center; justify-content: center;
+      padding: 30px 0; gap: 8px; color: var(--text-dim); font-size: 13px;
+    }
+    .spinner {
+      width: 16px; height: 16px;
+      border: 2px solid var(--spinner-border); border-top-color: var(--spinner-top);
+      border-radius: 50%; animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .no-key-warn {
+      background: var(--warn-bg); border: 1px solid var(--warn-border);
+      border-radius: 6px; padding: 10px 12px;
+      font-size: 12px; color: var(--warn-text); line-height: 1.5;
+      margin-bottom: 12px;
+    }
+    .no-key-warn strong { color: var(--warn-strong); }
+
+    /* ── Empty state ── */
+    #empty-state {
+      padding: 36px 20px;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      text-align: center;
+    }
+    #empty-state.visible { display: flex; }
+    #empty-state .icon { font-size: 40px; opacity: 0.2; line-height: 1; letter-spacing: 0; }
+    #empty-state p { font-size: 13px; color: var(--text-dim); line-height: 1.5; max-width: 260px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="left">
+    <h1>Jira Time Helper</h1>
+  </div>
+  <button id="btn-settings" title="Settings">···</button>
+</header>
+
+<!-- ══ SETTINGS PANEL ══ -->
+<div class="panel" id="panel-settings">
+
+  <span class="settings-label">AI Model</span>
+  <div class="model-picker">
+    <div class="model-btn active" data-model="gemini">
+      <span class="model-icon">✦</span>
+      Gemini Flash
+    </div>
+    <div class="model-btn" data-model="claude">
+      <span class="model-icon">◆</span>
+      Claude Haiku
+    </div>
+  </div>
+
+  <!-- Gemini key -->
+  <div class="key-section active" id="section-gemini">
+    <span class="settings-label">Gemini API Key</span>
+    <div class="key-row">
+      <input class="key-input" id="gemini-key-input" type="password" placeholder="AIza…" autocomplete="off" />
+      <button class="save-btn" id="btn-save-gemini">Save</button>
+    </div>
+    <p class="settings-hint">
+      Free key at <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com</a>.
+      Stored locally, never shared.
+    </p>
+  </div>
+
+  <!-- Claude key -->
+  <div class="key-section" id="section-claude">
+    <span class="settings-label">Anthropic API Key</span>
+    <div class="key-row">
+      <input class="key-input" id="claude-key-input" type="password" placeholder="sk-ant-…" autocomplete="off" />
+      <button class="save-btn" id="btn-save-claude">Save</button>
+    </div>
+    <p class="settings-hint">
+      Get a key at <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com</a>.
+      Stored locally, never shared.
+    </p>
+  </div>
+
+</div>
+
+<!-- ══ MAIN PANEL ══ -->
+<div class="panel active" id="panel-main">
+  <div id="loading"><div class="spinner"></div> Scanning page…</div>
+
+  <div id="empty-state">
+    <div class="icon">○</div>
+    <p id="empty-msg">Open a Jira issue to get started</p>
+  </div>
+
+  <div id="fields" style="display:none">
+    <div id="no-key-warn" class="no-key-warn" style="display:none">
+      <strong>No API key set.</strong> Click ··· above to add one.
+    </div>
+
+    <div class="field">
+      <label>Issue Key</label>
+      <div id="val-key" class="value key-value empty">—</div>
+    </div>
+    <div class="field">
+      <label>Summary</label>
+      <div id="val-summary" class="value empty">—</div>
+    </div>
+    <div class="field">
+      <label>Description</label>
+      <div id="val-desc" class="value empty">—</div>
+    </div>
+
+    <div class="ai-section">
+      <div class="ai-label">
+        Time Entry
+        <span class="badge" id="model-badge">Gemini</span>
+      </div>
+      <div class="ai-result loading-state" id="ai-result" contenteditable="false">
+        <span class="shimmer"></span>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="action" id="btn-copy-ai" disabled>Copy Summary</button>
+      <button class="action" id="btn-copy-raw">Copy Raw</button>
+      <button id="btn-refresh" title="Re-scan page">↻</button>
+    </div>
+
+    <div class="status-bar" id="status"></div>
+  </div>
+</div>
+
+<script src="popup.js"></script>
+</body>
+</html>

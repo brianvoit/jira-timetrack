@@ -1,0 +1,6 @@
+artifacts/
+web-ext-artifacts/
+node_modules/
+*.xpi
+.DS_Store
+.claude/

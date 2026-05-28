@@ -1,0 +1,101 @@
+name: Sign & Release Extension
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  sign-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install web-ext
+        run: npm install -g web-ext
+
+      # Pull version straight from manifest so it's always in sync
+      - name: Read version from manifest
+        id: version
+        run: |
+          VERSION=$(python3 -c "import json; print(json.load(open('extension/manifest.json'))['version'])")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      # Sign via AMO (unlisted channel — no public listing, just signing)
+      - name: Sign extension
+        run: |
+          cd extension
+          web-ext sign \
+            --api-key="${{ secrets.AMO_JWT_ISSUER }}" \
+            --api-secret="${{ secrets.AMO_JWT_SECRET }}" \
+            --channel=unlisted \
+            --artifacts-dir=../artifacts
+        
+      # Rename the signed XPI to a predictable filename
+      - name: Rename XPI
+        run: |
+          mv artifacts/*.xpi artifacts/jira-time-helper.xpi
+          echo "Signed XPI:"
+          ls -lh artifacts/
+
+      # Create a GitHub Release and attach the signed XPI
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            artifacts/jira-time-helper.xpi \
+            --title "v${{ steps.version.outputs.version }}" \
+            --notes "Release v${{ steps.version.outputs.version }}
+
+          **Install:** Download \`jira-time-helper.xpi\` and drag it into Firefox.
+          **Update:** Firefox will update automatically if you already have it installed."
+
+      # Update updates.json so Firefox knows a new version exists
+      - name: Update updates.json
+        run: |
+          python3 - <<'PYEOF'
+          import json
+
+          version = "${{ steps.version.outputs.version }}"
+          tag = "${{ github.ref_name }}"
+          download_url = f"https://github.com/brianvoit/jira-timetrack/releases/download/{tag}/jira-time-helper.xpi"
+
+          updates = {
+            "addons": {
+              "jira-time-helper@brianvoit": {
+                "updates": [
+                  {
+                    "version": version,
+                    "update_link": download_url
+                  }
+                ]
+              }
+            }
+          }
+
+          with open("updates.json", "w") as f:
+            json.dump(updates, f, indent=2)
+            f.write("\n")
+
+          print(f"Updated updates.json → version {version}, link {download_url}")
+          PYEOF
+
+      # Commit the updated updates.json back to main
+      - name: Commit updates.json
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add updates.json
+          git commit -m "chore: update updates.json for v${{ steps.version.outputs.version }}"
+          git push origin HEAD:main
