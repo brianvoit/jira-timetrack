@@ -16,32 +16,43 @@ function getIssueKeyFromUrl() {
 function scrapeJiraIssue() {
   const result = { key: null, summary: null, description: null };
 
-  // ── Issue Key ──────────────────────────────────────────────
-  // Try DOM first, fall back to URL
-  const keyEl =
-    document.querySelector('[data-testid="issue.views.issue-base.foundation.breadcrumbs.current-issue.item"]') ||
-    document.querySelector('#key-val') ||
-    document.querySelector('[data-issue-key]') ||
-    document.querySelector('.ghx-detail-issue-key') ||
-    document.querySelector('#ghx-detail-issue-key');
+  const urlParams    = new URLSearchParams(window.location.search);
+  const selectedIssue = urlParams.get('selectedIssue');
 
-  result.key = keyEl ? keyEl.textContent.trim() : getIssueKeyFromUrl();
+  // ── Issue Key ──────────────────────────────────────────────
+  if (selectedIssue) {
+    // RapidBoard: the selectedIssue URL param is always authoritative.
+    // Do NOT touch the DOM — the backlog list contains many [data-issue-key]
+    // elements and the first one matched is almost never the selected issue.
+    result.key = selectedIssue.toUpperCase();
+  } else {
+    // Standard browse page: DOM is reliable here (single issue rendered).
+    const keyEl =
+      document.querySelector('[data-testid="issue.views.issue-base.foundation.breadcrumbs.current-issue.item"]') ||
+      document.querySelector('#key-val') ||
+      document.querySelector('[data-issue-key]') ||
+      document.querySelector('.ghx-detail-issue-key') ||
+      document.querySelector('#ghx-detail-issue-key');
+    result.key = keyEl ? keyEl.textContent.trim() : getIssueKeyFromUrl();
+  }
 
   // ── Summary / Title ────────────────────────────────────────
-  // RapidBoard detail panel selectors first, then standard page selectors
-  const summaryEl =
-    // RapidBoard side panel (Jira Server)
-    document.querySelector('#ghx-detail-issue-title') ||
-    document.querySelector('.ghx-detail-issue-title') ||
-    document.querySelector('.issue-title') ||
-    document.querySelector('[data-field-id="summary"] .value') ||
-    // Standard issue page (Jira Cloud)
-    document.querySelector('h1[data-testid="issue.views.issue-base.foundation.summary.heading"]') ||
-    document.querySelector('[data-testid*="summary"] h1') ||
-    // Standard issue page (Jira Server)
-    document.querySelector('#summary-val') ||
-    document.querySelector('h1[class*="Summary"]') ||
-    document.querySelector('h1');
+  // On RapidBoard, restrict to the right-side detail panel only.
+  // Falling back to `h1` is unsafe there — it can grab sprint/board headings.
+  const summaryEl = selectedIssue
+    ? (
+        document.querySelector('#ghx-detail-issue-title') ||
+        document.querySelector('.ghx-detail-issue-title') ||
+        document.querySelector('.issue-title') ||
+        document.querySelector('[data-field-id="summary"] .value')
+      )
+    : (
+        document.querySelector('h1[data-testid="issue.views.issue-base.foundation.summary.heading"]') ||
+        document.querySelector('[data-testid*="summary"] h1') ||
+        document.querySelector('#summary-val') ||
+        document.querySelector('h1[class*="Summary"]') ||
+        document.querySelector('h1')
+      );
 
   if (summaryEl) result.summary = summaryEl.textContent.trim();
 
