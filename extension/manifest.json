@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Jira Time Helper",
-  "version": "1.5",
+  "version": "1.6",
   "description": "Extracts Jira issue details and uses AI to generate a clean time entry summary.",
   "icons": {
     "48": "icons/icon48.png",
@@ -35,7 +35,8 @@
   ],
   "host_permissions": [
     "https://generativelanguage.googleapis.com/*",
-    "https://api.anthropic.com/*"
+    "https://api.anthropic.com/*",
+    "https://raw.githubusercontent.com/*"
   ],
   "content_scripts": [
     {

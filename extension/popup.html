@@ -266,6 +266,38 @@
     }
     .no-key-warn strong { color: var(--warn-strong); }
 
+    /* ── Update checker ── */
+    .update-section {
+      margin-top: 14px; padding-top: 14px;
+      border-top: 1px solid var(--border);
+    }
+    .update-row {
+      display: flex; align-items: center;
+      justify-content: space-between; gap: 8px;
+    }
+    .version-text {
+      font-size: 11px; color: var(--text-dim); font-family: monospace;
+    }
+    .check-update-btn {
+      padding: 6px 12px; background: var(--action); color: var(--action-text);
+      border: 1px solid var(--border); border-radius: 6px;
+      font-size: 11px; font-weight: 600; cursor: pointer;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+      white-space: nowrap;
+    }
+    .check-update-btn:hover { background: var(--action-hover); color: var(--action-text-hover); }
+    .check-update-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .check-update-btn.up-to-date { background: #16a34a; color: #fff; border-color: #16a34a; }
+    .update-status {
+      margin-top: 7px; font-size: 11px;
+      color: var(--text-dim); line-height: 1.5; display: none;
+    }
+    .update-status.visible { display: block; }
+    .update-status.has-update { color: #2563eb; }
+    .update-status.error { color: #e05555; }
+    .update-status a { color: var(--key-text); text-decoration: none; }
+    .update-status a:hover { text-decoration: underline; }
+
     /* ── Empty state ── */
     #empty-state {
       padding: 36px 20px;
@@ -328,6 +360,15 @@
       Get a key at <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com</a>.
       Stored locally, never shared.
     </p>
+  </div>
+
+  <!-- Version / update check -->
+  <div class="update-section">
+    <div class="update-row">
+      <span class="version-text" id="version-display">v—</span>
+      <button class="check-update-btn" id="btn-check-update">Check for updates</button>
+    </div>
+    <div class="update-status" id="update-status"></div>
   </div>
 
 </div>

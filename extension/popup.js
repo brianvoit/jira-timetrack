@@ -3,6 +3,8 @@
 const GEMINI_URL   = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
 const CLAUDE_URL   = 'https://api.anthropic.com/v1/messages';
 const CLAUDE_MODEL = 'claude-haiku-4-5';
+const UPDATES_URL  = 'https://raw.githubusercontent.com/brianvoit/jira-timetrack/main/updates.json';
+const ADDON_ID     = 'jira-time-helper@brianvoit';
 
 // ── DOM ────────────────────────────────────────────────────────
 const panelMain     = document.getElementById('panel-main');
@@ -27,8 +29,11 @@ const aiResult      = document.getElementById('ai-result');
 const modelBadge    = document.getElementById('model-badge');
 const btnCopyAI     = document.getElementById('btn-copy-ai');
 const btnCopyRaw    = document.getElementById('btn-copy-raw');
-const btnRefresh    = document.getElementById('btn-refresh');
-const statusEl      = document.getElementById('status');
+const btnRefresh      = document.getElementById('btn-refresh');
+const statusEl        = document.getElementById('status');
+const versionDisplay  = document.getElementById('version-display');
+const btnCheckUpdate  = document.getElementById('btn-check-update');
+const updateStatusEl  = document.getElementById('update-status');
 
 let currentData    = {};
 let currentSummary = '';
@@ -387,5 +392,57 @@ aiResult.addEventListener('input', () => {
 btnCopyAI.addEventListener('click',  () => copyText(currentSummary, btnCopyAI,  'Copy Summary'));
 btnCopyRaw.addEventListener('click', () => copyText(buildRawText(), btnCopyRaw, 'Copy Raw'));
 btnRefresh.addEventListener('click', scrape);
+
+// ── Version display + update check ────────────────────────────
+const currentVersion = browser.runtime.getManifest().version;
+versionDisplay.textContent = `v${currentVersion}`;
+
+function compareVersions(a, b) {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] || 0) - (pb[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+btnCheckUpdate.addEventListener('click', async () => {
+  btnCheckUpdate.disabled = true;
+  btnCheckUpdate.textContent = 'Checking…';
+  updateStatusEl.className = 'update-status';
+  updateStatusEl.textContent = '';
+
+  try {
+    const resp = await fetchWithTimeout(UPDATES_URL, {}, 8000);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    const updates = data?.addons?.[ADDON_ID]?.updates || [];
+    if (!updates.length) throw new Error('No version info found.');
+
+    const latest = updates[updates.length - 1];
+
+    if (compareVersions(latest.version, currentVersion) > 0) {
+      btnCheckUpdate.textContent = 'Check for updates';
+      btnCheckUpdate.disabled = false;
+      updateStatusEl.innerHTML =
+        `v${latest.version} available — <a href="${latest.update_link}" target="_blank">download</a>`;
+      updateStatusEl.className = 'update-status visible has-update';
+    } else {
+      btnCheckUpdate.textContent = '✓ Up to date';
+      btnCheckUpdate.classList.add('up-to-date');
+      setTimeout(() => {
+        btnCheckUpdate.textContent = 'Check for updates';
+        btnCheckUpdate.classList.remove('up-to-date');
+        btnCheckUpdate.disabled = false;
+      }, 2500);
+    }
+  } catch (e) {
+    btnCheckUpdate.textContent = 'Check for updates';
+    btnCheckUpdate.disabled = false;
+    updateStatusEl.textContent = 'Could not check — try again.';
+    updateStatusEl.className = 'update-status visible error';
+  }
+});
 
 scrape();
