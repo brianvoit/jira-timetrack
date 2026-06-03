@@ -43,8 +43,13 @@ function scrapeJiraIssue() {
     ? (
         document.querySelector('#ghx-detail-issue-title') ||
         document.querySelector('.ghx-detail-issue-title') ||
+        document.querySelector('input#summary') ||
         document.querySelector('.issue-title') ||
-        document.querySelector('[data-field-id="summary"] .value')
+        document.querySelector('[data-field-id="summary"] .value') ||
+        document.querySelector('h1[data-testid="issue.views.issue-base.foundation.summary.heading"]') ||
+        document.querySelector('[data-testid*="summary"] h1') ||
+        document.querySelector('#summary-val') ||
+        document.querySelector('h1[class*="Summary"]')
       )
     : (
         document.querySelector('h1[data-testid="issue.views.issue-base.foundation.summary.heading"]') ||
@@ -54,7 +59,11 @@ function scrapeJiraIssue() {
         document.querySelector('h1')
       );
 
-  if (summaryEl) result.summary = summaryEl.textContent.trim();
+  if (summaryEl) {
+    result.summary = (summaryEl.tagName === 'INPUT' || summaryEl.tagName === 'TEXTAREA')
+      ? summaryEl.value.trim()
+      : summaryEl.textContent.trim();
+  }
 
   // ── Description ────────────────────────────────────────────
   // RapidBoard shows a limited detail panel — description may be truncated or absent
