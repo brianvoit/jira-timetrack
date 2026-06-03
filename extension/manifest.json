@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Jira Time Helper",
-  "version": "1.6",
+  "version": "1.7",
   "description": "Extracts Jira issue details and uses AI to generate a clean time entry summary.",
   "icons": {
     "48": "icons/icon48.png",
@@ -16,11 +16,7 @@
     "gecko": {
       "id": "jira-time-helper@brianvoit",
       "strict_min_version": "109.0",
-      "update_url": "https://raw.githubusercontent.com/brianvoit/jira-timetrack/main/updates.json",
-      "data_collection_permissions": {
-        "required": ["websiteContent"],
-        "optional": []
-      }
+      "update_url": "https://raw.githubusercontent.com/brianvoit/jira-timetrack/main/updates.json"
     }
   },
   "background": {
@@ -31,9 +27,7 @@
     "activeTab",
     "clipboardWrite",
     "storage",
-    "tabs"
-  ],
-  "host_permissions": [
+    "tabs",
     "https://generativelanguage.googleapis.com/*",
     "https://api.anthropic.com/*",
     "https://raw.githubusercontent.com/*"

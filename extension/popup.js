@@ -425,8 +425,15 @@ btnCheckUpdate.addEventListener('click', async () => {
     if (compareVersions(latest.version, currentVersion) > 0) {
       btnCheckUpdate.textContent = 'Check for updates';
       btnCheckUpdate.disabled = false;
-      updateStatusEl.innerHTML =
-        `v${latest.version} available — <a href="${latest.update_link}" target="_blank">download</a>`;
+      updateStatusEl.textContent = '';
+      const linkText = document.createTextNode(`v${latest.version} available — `);
+      const linkEl = document.createElement('a');
+      linkEl.href = latest.update_link;
+      linkEl.target = '_blank';
+      linkEl.rel = 'noopener noreferrer';
+      linkEl.textContent = 'download';
+      updateStatusEl.appendChild(linkText);
+      updateStatusEl.appendChild(linkEl);
       updateStatusEl.className = 'update-status visible has-update';
     } else {
       btnCheckUpdate.textContent = '✓ Up to date';
