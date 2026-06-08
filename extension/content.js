@@ -7,8 +7,12 @@ function getIssueKeyFromUrl() {
   if (selected) return selected.toUpperCase();
 
   // Standard browse URL: /browse/PROJ-123
-  const match = window.location.pathname.match(/\/browse\/([A-Z][A-Z0-9]+-\d+)/i);
-  if (match) return match[1].toUpperCase();
+  const browseMatch = window.location.pathname.match(/\/browse\/([A-Z][A-Z0-9]+-\d+)/i);
+  if (browseMatch) return browseMatch[1].toUpperCase();
+
+  // Project issues view: /projects/PROJ/issues/PROJ-123
+  const projectMatch = window.location.pathname.match(/\/projects\/[^/]+\/issues\/([A-Z][A-Z0-9]+-\d+)/i);
+  if (projectMatch) return projectMatch[1].toUpperCase();
 
   return null;
 }

@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Jira Time Helper",
-  "version": "1.9",
+  "version": "2.0",
   "description": "Extracts Jira issue details and uses AI to generate a clean time entry summary.",
   "icons": {
     "48": "icons/icon48.png",
@@ -40,7 +40,8 @@
         "*://*/browse/*",
         "*://*/jira/browse/*",
         "*://*/secure/RapidBoard.jspa*",
-        "*://*/jira/software/*/boards/*"
+        "*://*/jira/software/*/boards/*",
+        "*://*/projects/*/issues/*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"
