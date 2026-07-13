@@ -3,8 +3,8 @@
     "jira-time-helper@brianvoit": {
       "updates": [
         {
-          "version": "2.0",
-          "update_link": "https://github.com/brianvoit/jira-timetrack/releases/download/v2.0/jira-time-helper.xpi"
+          "version": "2.1",
+          "update_link": "https://github.com/brianvoit/jira-timetrack/releases/download/v2.1/jira-time-helper.xpi"
         }
       ]
     }
