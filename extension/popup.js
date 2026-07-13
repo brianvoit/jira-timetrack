@@ -147,7 +147,8 @@ function isJiraUrl(url) {
     /atlassian\.net/i.test(url) ||
     /\/browse\/[A-Z]/i.test(url) ||
     /\/secure\/RapidBoard\.jspa/i.test(url) ||
-    /\/jira\/software\/.*\/boards\//i.test(url)
+    /\/jira\/software\/.*\/boards\//i.test(url) ||
+    /\/projects\/[^/]+\/issues\/[A-Z]/i.test(url)
   );
 }
 
