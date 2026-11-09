@@ -151,6 +151,11 @@
     .settings-hint a { color: var(--key-text); text-decoration: none; }
     .settings-hint a:hover { text-decoration: underline; }
 
+    .settings-label.spaced { margin-top: 14px; }
+    .settings-hint.caution { color: var(--warn-text); }
+    .model-input { width: 100%; flex: none; }
+    .key-input.saved { border-color: #16a34a; }
+
     .key-section { display: none; }
     .key-section.active { display: block; }
 
@@ -187,6 +192,7 @@
     .ai-label .badge {
       background: var(--badge-bg); color: var(--badge-text);
       font-size: 9px; padding: 1px 6px; border-radius: 20px; letter-spacing: 0.5px;
+      text-transform: none; font-family: monospace;
     }
     .ai-result {
       background: var(--ai-bg); border: 1px solid var(--ai-border);
@@ -347,6 +353,13 @@
       Free key at <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com</a>.
       Stored locally, never shared.
     </p>
+    <p class="settings-hint caution">
+      Free-tier keys let Google use requests to improve its products. For confidential
+      client tickets, use a paid-tier key or Claude.
+    </p>
+    <span class="settings-label spaced">Model</span>
+    <input class="key-input model-input" id="gemini-model-input" type="text" spellcheck="false" autocomplete="off" />
+    <p class="settings-hint">Leave blank for the default. Change only if the default is retired.</p>
   </div>
 
   <!-- Claude key -->
@@ -360,6 +373,9 @@
       Get a key at <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com</a>.
       Stored locally, never shared.
     </p>
+    <span class="settings-label spaced">Model</span>
+    <input class="key-input model-input" id="claude-model-input" type="text" spellcheck="false" autocomplete="off" />
+    <p class="settings-hint">Leave blank for the default. Change only if the default is retired.</p>
   </div>
 
   <!-- Version / update check -->

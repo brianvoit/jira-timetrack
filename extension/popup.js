@@ -1,10 +1,22 @@
-// popup.js — v1.4
+// popup.js
 
-const GEMINI_URL   = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+const GEMINI_BASE  = 'https://generativelanguage.googleapis.com/v1beta/models';
 const CLAUDE_URL   = 'https://api.anthropic.com/v1/messages';
-const CLAUDE_MODEL = 'claude-haiku-4-5';
 const UPDATES_URL  = 'https://raw.githubusercontent.com/brianvoit/jira-timetrack/main/updates.json';
 const ADDON_ID     = 'jira-time-helper@brianvoit';
+
+// Defaults used when the model field in settings is blank.
+// If a provider retires one, users can override it in settings without a release.
+const DEFAULT_MODELS = {
+  gemini: 'gemini-3.5-flash-lite',
+  claude: 'claude-haiku-5-5',
+};
+const PROVIDER_NAMES = { gemini: 'Gemini', claude: 'Claude' };
+
+const AI_TIMEOUT_MS   = 20000;
+const RETRY_STATUSES  = new Set([429, 500, 502, 503, 529]);
+const CACHE_MAX       = 50;
+const CACHE_TTL_MS    = 7 * 24 * 60 * 60 * 1000;
 
 // ── DOM ────────────────────────────────────────────────────────
 const panelMain     = document.getElementById('panel-main');
@@ -15,6 +27,8 @@ const sectionGemini = document.getElementById('section-gemini');
 const sectionClaude = document.getElementById('section-claude');
 const geminiInput   = document.getElementById('gemini-key-input');
 const claudeInput   = document.getElementById('claude-key-input');
+const geminiModelInput = document.getElementById('gemini-model-input');
+const claudeModelInput = document.getElementById('claude-model-input');
 const btnSaveGemini = document.getElementById('btn-save-gemini');
 const btnSaveClaude = document.getElementById('btn-save-claude');
 const noKeyWarn     = document.getElementById('no-key-warn');
@@ -38,9 +52,10 @@ const updateStatusEl  = document.getElementById('update-status');
 let currentData    = {};
 let currentSummary = '';
 let settingsOpen   = false;
-let selectedModel  = 'gemini'; // 'gemini' | 'claude'
+let selectedModel  = 'gemini'; // provider: 'gemini' | 'claude'
 
-const resultCache  = new Map(); // key: `${ticketKey}:${model}`
+geminiModelInput.placeholder = DEFAULT_MODELS.gemini;
+claudeModelInput.placeholder = DEFAULT_MODELS.claude;
 
 // ── Settings: model picker ─────────────────────────────────────
 modelBtns.forEach(btn => {
@@ -81,6 +96,18 @@ function makeSaveHandler(inputEl, storageKey, btn) {
 makeSaveHandler(geminiInput, 'geminiApiKey', btnSaveGemini);
 makeSaveHandler(claudeInput, 'claudeApiKey', btnSaveClaude);
 
+// ── Settings: model ID overrides (saved on change; blank = default) ──
+function makeModelHandler(inputEl, storageKey) {
+  inputEl.addEventListener('change', async () => {
+    await browser.storage.local.set({ [storageKey]: inputEl.value.trim() });
+    inputEl.classList.add('saved');
+    setTimeout(() => inputEl.classList.remove('saved'), 1200);
+  });
+}
+
+makeModelHandler(geminiModelInput, 'geminiModel');
+makeModelHandler(claudeModelInput, 'claudeModel');
+
 btnSettings.addEventListener('click', () => {
   settingsOpen = !settingsOpen;
   panelSettings.classList.toggle('active', settingsOpen);
@@ -90,9 +117,13 @@ btnSettings.addEventListener('click', () => {
 
 // ── Init: restore saved settings ──────────────────────────────
 (async () => {
-  const stored = await browser.storage.local.get(['geminiApiKey', 'claudeApiKey', 'selectedModel']);
+  const stored = await browser.storage.local.get(
+    ['geminiApiKey', 'claudeApiKey', 'selectedModel', 'geminiModel', 'claudeModel']
+  );
   if (stored.geminiApiKey) geminiInput.value = stored.geminiApiKey;
   if (stored.claudeApiKey) claudeInput.value = stored.claudeApiKey;
+  if (stored.geminiModel)  geminiModelInput.value = stored.geminiModel;
+  if (stored.claudeModel)  claudeModelInput.value = stored.claudeModel;
   if (stored.selectedModel) {
     selectedModel = stored.selectedModel;
     modelBtns.forEach(b => b.classList.toggle('active', b.dataset.model === selectedModel));
@@ -154,8 +185,8 @@ function isJiraUrl(url) {
 
 function buildRawText() {
   const parts = [];
-  if (currentData.key)         parts.push(`Ticket:  ${currentData.key}`);
-  if (currentData.summary)     parts.push(`Summary: ${currentData.summary}`);
+  if (currentData.key)         parts.push(`Ticket:    ${currentData.key}`);
+  if (currentData.summary)     parts.push(`Task Name: ${currentData.summary}`);
   if (currentData.description) parts.push(`\nDescription:\n${currentData.description}`);
   return parts.join('\n');
 }
@@ -181,7 +212,50 @@ Summary: ${data.summary || 'N/A'}
 Description: ${data.description || 'N/A'}`;
 }
 
+// ── Result cache (persists across popup opens) ─────────────────
+// Keyed on provider + model + ticket + a hash of the ticket text, so an edited
+// ticket or a model change produces a fresh result.
+function hashText(s) {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
+function cacheKey(data, provider, modelId) {
+  const text = `${data.summary || ''}\n${data.description || ''}`;
+  return `${provider}:${modelId}:${data.key || ''}:${hashText(text)}`;
+}
+
+async function getCached(key) {
+  const { aiCache = {} } = await browser.storage.local.get('aiCache');
+  const entry = aiCache[key];
+  return entry && Date.now() - entry.t < CACHE_TTL_MS ? entry.text : null;
+}
+
+async function putCached(key, text) {
+  const { aiCache = {} } = await browser.storage.local.get('aiCache');
+  aiCache[key] = { text, t: Date.now() };
+  const now = Date.now();
+  const kept = Object.entries(aiCache)
+    .filter(([, v]) => now - v.t < CACHE_TTL_MS)
+    .sort((a, b) => b[1].t - a[1].t)
+    .slice(0, CACHE_MAX);
+  await browser.storage.local.set({ aiCache: Object.fromEntries(kept) });
+}
+
 // ── Network helpers ────────────────────────────────────────────
+class ApiError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.status = status;
+  }
+}
+
+async function readApiError(resp) {
+  const body = await resp.json().catch(() => ({}));
+  return new ApiError(body?.error?.message || `HTTP ${resp.status}`, resp.status);
+}
+
 async function fetchWithTimeout(url, options, ms = 10000) {
   const ctrl = new AbortController();
   const id = setTimeout(() => ctrl.abort(), ms);
@@ -196,24 +270,29 @@ async function fetchWithTimeout(url, options, ms = 10000) {
 }
 
 // ── API calls ──────────────────────────────────────────────────
-async function callGemini(data, apiKey) {
-  const resp = await fetchWithTimeout(`${GEMINI_URL}?key=${apiKey}`, {
+async function callGemini(prompt, apiKey, modelId) {
+  const resp = await fetchWithTimeout(`${GEMINI_BASE}/${encodeURIComponent(modelId)}:generateContent`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': apiKey
+    },
     body: JSON.stringify({
-      contents: [{ parts: [{ text: buildPrompt(data) }] }],
-      generationConfig: { maxOutputTokens: 80, temperature: 0.3 }
+      contents: [{ parts: [{ text: prompt }] }],
+      // Thinking tokens count toward this limit on Gemini 3.x, so leave headroom.
+      generationConfig: { maxOutputTokens: 1024 }
     })
-  });
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({}));
-    throw new Error(err?.error?.message || `HTTP ${resp.status}`);
-  }
+  }, AI_TIMEOUT_MS);
+  if (!resp.ok) throw await readApiError(resp);
   const result = await resp.json();
-  return result.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || null;
+  if (result.promptFeedback?.blockReason) {
+    throw new ApiError(`Blocked by Gemini safety filter (${result.promptFeedback.blockReason}).`);
+  }
+  const parts = result.candidates?.[0]?.content?.parts || [];
+  return parts.filter(p => !p.thought && p.text).map(p => p.text).join('').trim() || null;
 }
 
-async function callClaude(data, apiKey) {
+async function callClaude(prompt, apiKey, modelId) {
   const resp = await fetchWithTimeout(CLAUDE_URL, {
     method: 'POST',
     headers: {
@@ -223,29 +302,31 @@ async function callClaude(data, apiKey) {
       'anthropic-dangerous-direct-browser-access': 'true'
     },
     body: JSON.stringify({
-      model: CLAUDE_MODEL,
-      max_tokens: 80,
-      messages: [{ role: 'user', content: buildPrompt(data) }]
+      model: modelId,
+      max_tokens: 200,
+      messages: [{ role: 'user', content: prompt }]
     })
-  });
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({}));
-    throw new Error(err?.error?.message || `HTTP ${resp.status}`);
-  }
+  }, AI_TIMEOUT_MS);
+  if (!resp.ok) throw await readApiError(resp);
   const result = await resp.json();
-  return result.content?.[0]?.text?.trim() || null;
+  return (result.content || [])
+    .filter(b => b.type === 'text')
+    .map(b => b.text)
+    .join('')
+    .trim() || null;
 }
 
-// Wraps the selected model call with a single 429 retry
-async function callAI(data, apiKey) {
+// Calls the given provider, retrying once on rate-limit / overload / 5xx.
+async function callAI(provider, data, apiKey, modelId) {
+  const prompt = buildPrompt(data);
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      return selectedModel === 'claude'
-        ? await callClaude(data, apiKey)
-        : await callGemini(data, apiKey);
+      return provider === 'claude'
+        ? await callClaude(prompt, apiKey, modelId)
+        : await callGemini(prompt, apiKey, modelId);
     } catch (e) {
-      if (attempt === 0 && /429|rate.limit|too many/i.test(e.message)) {
-        setStatus('Rate limited — retrying…');
+      if (attempt === 0 && RETRY_STATUSES.has(e.status)) {
+        setStatus(e.status === 429 ? 'Rate limited — retrying…' : 'Service busy — retrying…');
         await new Promise(r => setTimeout(r, 1500));
         continue;
       }
@@ -254,8 +335,21 @@ async function callAI(data, apiKey) {
   }
 }
 
+function friendlyError(e, modelId) {
+  const msg = e.message || 'Unknown error';
+  if (e.status === 401 || e.status === 403 || /api.key|authentication/i.test(msg)) {
+    return 'Invalid API key — check your key in ··· settings.';
+  }
+  if (e.status === 404 || /not.found|does not exist|not supported/i.test(msg)) {
+    return `Model "${modelId}" isn't available (it may have been retired). Change it in ··· settings.`;
+  }
+  if (e.status === 429) return 'Rate limited — wait a moment and hit ↻.';
+  return `Error: ${msg}`;
+}
+
 // ── Scrape + summarise ─────────────────────────────────────────
-async function scrape() {
+// regenerate: skip the cached result and ask the AI for a fresh one (↻ button).
+async function scrape({ regenerate = false } = {}) {
   btnRefresh.disabled = true;
   emptyStateEl.classList.remove('visible');
   loading.style.display = 'flex';
@@ -300,13 +394,17 @@ async function scrape() {
   loading.style.display = 'none';
   fieldsEl.style.display = 'block';
 
-  const stored = await browser.storage.local.get(['geminiApiKey', 'claudeApiKey', 'selectedModel']);
-  selectedModel = stored.selectedModel || selectedModel;
-  const apiKey = selectedModel === 'claude' ? stored.claudeApiKey : stored.geminiApiKey;
+  const stored = await browser.storage.local.get(
+    ['geminiApiKey', 'claudeApiKey', 'selectedModel', 'geminiModel', 'claudeModel']
+  );
+  const provider = stored.selectedModel || selectedModel;
+  selectedModel  = provider;
+  const apiKey   = provider === 'claude' ? stored.claudeApiKey : stored.geminiApiKey;
+  const modelId  = (provider === 'claude' ? stored.claudeModel : stored.geminiModel) || DEFAULT_MODELS[provider];
 
   if (!apiKey) {
     noKeyWarn.style.display = 'block';
-    setAiState('error', `Add a ${selectedModel === 'claude' ? 'Claude' : 'Gemini'} API key in ··· settings.`);
+    setAiState('error', `Add a ${PROVIDER_NAMES[provider]} API key in ··· settings.`);
     btnRefresh.disabled = false;
     return;
   }
@@ -318,34 +416,32 @@ async function scrape() {
     return;
   }
 
-  modelBadge.textContent = selectedModel === 'claude' ? 'Claude Haiku' : 'Gemini';
+  modelBadge.textContent = modelId;
+  modelBadge.title = `${PROVIDER_NAMES[provider]} · ${modelId}`;
 
-  // Return cached result if available for this ticket + model combo
-  const ck = `${currentData.key || ''}:${selectedModel}`;
-  if (resultCache.has(ck)) {
-    setAiState('ready', resultCache.get(ck));
-    setStatus('AI summary ready', 'success');
-    btnRefresh.disabled = false;
-    return;
+  const ck = cacheKey(currentData, provider, modelId);
+  if (!regenerate) {
+    const cached = await getCached(ck).catch(() => null);
+    if (cached) {
+      setAiState('ready', cached);
+      setStatus('AI summary ready', 'success');
+      btnRefresh.disabled = false;
+      return;
+    }
   }
 
   setAiState('loading');
   try {
-    const summary = await callAI(currentData, apiKey);
+    const summary = await callAI(provider, currentData, apiKey, modelId);
     if (summary) {
-      resultCache.set(ck, summary);
       setAiState('ready', summary);
       setStatus('AI summary ready', 'success');
+      putCached(ck, summary).catch(() => {});
     } else {
-      setAiState('error', 'Empty response — try refreshing.');
+      setAiState('error', 'Empty response — hit ↻ to try again.');
     }
   } catch (e) {
-    const msg = e.message || '';
-    if (/api.key|401|authentication/i.test(msg)) {
-      setAiState('error', 'Invalid API key — check your key in settings.');
-    } else {
-      setAiState('error', `Error: ${msg}`);
-    }
+    setAiState('error', friendlyError(e, modelId));
   } finally {
     btnRefresh.disabled = false;
   }
@@ -392,7 +488,7 @@ aiResult.addEventListener('input', () => {
 
 btnCopyAI.addEventListener('click',  () => copyText(currentSummary, btnCopyAI,  'Copy Summary'));
 btnCopyRaw.addEventListener('click', () => copyText(buildRawText(), btnCopyRaw, 'Copy Raw'));
-btnRefresh.addEventListener('click', scrape);
+btnRefresh.addEventListener('click', () => scrape({ regenerate: true }));
 
 // ── Version display + update check ────────────────────────────
 const currentVersion = browser.runtime.getManifest().version;

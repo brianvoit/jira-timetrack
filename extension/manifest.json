@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Jira Time Helper",
-  "version": "2.1",
+  "version": "2.2",
   "description": "Extracts Jira issue details and uses AI to generate a clean time entry summary.",
   "icons": {
     "48": "icons/icon48.png",
