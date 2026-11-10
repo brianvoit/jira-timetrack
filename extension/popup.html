@@ -272,6 +272,35 @@
     }
     .no-key-warn strong { color: var(--warn-strong); }
 
+    /* ── PM ── */
+    #btn-start-pm {
+      width: 100%; margin-top: 12px; background: #16a34a; color: #fff;
+      padding: 10px 12px; font-size: 13px;
+    }
+    #btn-start-pm:not(:disabled):hover { background: #19b653; }
+    .pm-status {
+      margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--section-border);
+      font-size: 12px; color: var(--text-muted);
+    }
+    .pm-status:empty { display: none; }
+    .pm-head { display: flex; justify-content: space-between; align-items: baseline; }
+    .pm-head span { font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
+    .pm-head strong { color: var(--text); font-size: 13px; }
+    .pm-bar { height: 5px; border-radius: 3px; background: var(--action); margin: 5px 0 7px; overflow: hidden; }
+    .pm-bar i { display: block; height: 100%; background: #2563eb; }
+    .pm-bar i.done { background: #16a34a; }
+    .pm-line { padding: 2px 0; line-height: 1.45; word-break: break-word; }
+    .pm-line.running { color: var(--text); }
+    .pm-line.muted { color: var(--text-dim); }
+    .pm-line.warn { color: var(--warn-text); }
+    .pm-line a { color: var(--key-text); cursor: pointer; text-decoration: underline; }
+    .pm-settings { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+    .setting-row {
+      display: flex; align-items: center; gap: 8px; font-size: 12px;
+      color: var(--text); margin-top: 6px; cursor: pointer;
+    }
+    .goal-input { flex: none; width: 64px; padding: 5px 8px; }
+
     /* ── Update checker ── */
     .update-section {
       margin-top: 14px; padding-top: 14px;
@@ -378,6 +407,18 @@
     <p class="settings-hint">Leave blank for the default. Change only if the default is retired.</p>
   </div>
 
+  <!-- PM -->
+  <div class="pm-settings">
+    <span class="settings-label">PM (pm.plaudit.com)</span>
+    <label class="setting-row">
+      Daily goal
+      <input class="key-input goal-input" id="goal-input" type="number" min="1" max="12" step="0.5" /> hours
+    </label>
+    <label class="setting-row">
+      <input type="checkbox" id="show-button-input" /> Show the Start timer button on Jira pages
+    </label>
+  </div>
+
   <!-- Version / update check -->
   <div class="update-section">
     <div class="update-row">
@@ -426,16 +467,21 @@
       </div>
     </div>
 
+    <button class="action" id="btn-start-pm" disabled>▶ Start PM timer</button>
     <div class="actions">
       <button class="action" id="btn-copy-ai" disabled>Copy Summary</button>
       <button class="action" id="btn-copy-raw">Copy Raw</button>
-      <button id="btn-refresh" title="Re-scan page">↻</button>
+      <button id="btn-refresh" title="Regenerate">↻</button>
     </div>
 
     <div class="status-bar" id="status"></div>
   </div>
+
+  <div class="pm-status" id="pm-status"></div>
 </div>
 
+<script src="lib/jira.js"></script>
+<script src="lib/ai.js"></script>
 <script src="popup.js"></script>
 </body>
 </html>

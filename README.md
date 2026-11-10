@@ -1,12 +1,22 @@
 # Jira Time Helper
 
-A Firefox extension that scans a Jira issue page and uses AI (Gemini Flash or Claude Haiku) to generate a clean one-liner time entry in the format:
+A Firefox extension that starts the right **pm.plaudit.com** timer from a Jira ticket, with an AI-written note (Gemini or Claude) in the format:
 
 ```
 Description of work done (TICKET-123)
 ```
 
-Works on standard `/browse/` issue pages and RapidBoard planning/sprint views.
+Works on `/browse/` issue pages, `/projects/…/issues/…` views, and RapidBoard boards (with an issue selected).
+
+### How the PM timer is chosen
+1. **Existing entry** — if a PM entry's note already ends in `(TICKET-123)`, it is resumed.
+2. **Listed on the ticket** — a PM project link (`viewProjects=<id>`) or exact project name in the ticket.
+3. **Client match** — the Jira key / project name is matched to PM client and site names
+   (e.g. `SMARTVEST` → `smartvest.com - Google Ads`), then the AI picks the best-fit timer
+   for that client from the ticket's title and description.
+4. **No client match** — the AI suggests a timer and you confirm it in a picker. The choice is remembered.
+
+Every start says which timer it used and offers **Change timer**.
 
 ---
 
@@ -19,10 +29,13 @@ jira-timetrack/
 │       └── release.yml       # Auto-signs and releases on version tag
 ├── extension/
 │   ├── manifest.json
-│   ├── background.js
-│   ├── popup.html
-│   ├── popup.js
-│   ├── content.js
+│   ├── background.js         # PM timer flow, toolbar badge
+│   ├── content.js            # reads the Jira issue (REST API), "Start timer" button
+│   ├── popup.html / popup.js # AI note, copy, Today panel, settings
+│   ├── lib/
+│   │   ├── jira.js           # URL → issue key (single source of truth)
+│   │   ├── ai.js             # Gemini / Claude calls, note + project best-fit
+│   │   └── pm.js             # pm.plaudit.com client (Timers page, project tree)
 │   └── icons/
 │       ├── icon48.png
 │       └── icon96.png
@@ -84,13 +97,15 @@ Future updates are delivered automatically — Firefox polls `updates.json` and 
 
 ## Usage
 
-1. Navigate to any Jira issue or RapidBoard (click an issue first on board views)
-2. Click the extension icon in the toolbar (shows a green dot on Jira pages)
-3. First time: click **···** and add your API key
-   - **Gemini:** free key at [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
-   - **Claude Haiku:** key at [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)
-4. Edit the AI result in the box if needed, then click **Copy Summary**
-5. Paste into Harvest, Toggl, etc.
+1. Be signed in to **pm.plaudit.com** in Firefox.
+2. First time: click the toolbar icon → **···** and add an AI key
+   - **Gemini:** key at [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
+   - **Claude:** key at [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)
+3. Open a Jira issue and click **▶ Start timer** (bottom-right of the page), or **▶ Start PM timer** in the popup
+   (the popup lets you edit the note first).
+4. The toolbar badge shows the running timer's elapsed time, or **!** if a timer has been running too long.
+5. The popup's **Today** panel shows billable hours against your daily goal (default 7 h, set in **···**)
+   and flags runaway timers, very long segments, and entries without notes.
 
 ---
 

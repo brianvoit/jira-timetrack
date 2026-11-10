@@ -1,61 +1,52 @@
-// popup.js
+// popup.js — uses lib/jira.js (JiraUrl) and lib/ai.js (AI), loaded before this file.
 
-const GEMINI_BASE  = 'https://generativelanguage.googleapis.com/v1beta/models';
-const CLAUDE_URL   = 'https://api.anthropic.com/v1/messages';
-const UPDATES_URL  = 'https://raw.githubusercontent.com/brianvoit/jira-timetrack/main/updates.json';
-const ADDON_ID     = 'jira-time-helper@brianvoit';
-
-// Defaults used when the model field in settings is blank.
-// If a provider retires one, users can override it in settings without a release.
-const DEFAULT_MODELS = {
-  gemini: 'gemini-3.5-flash-lite',
-  claude: 'claude-haiku-5-5',
-};
-const PROVIDER_NAMES = { gemini: 'Gemini', claude: 'Claude' };
-
-const AI_TIMEOUT_MS   = 20000;
-const RETRY_STATUSES  = new Set([429, 500, 502, 503, 529]);
-const CACHE_MAX       = 50;
-const CACHE_TTL_MS    = 7 * 24 * 60 * 60 * 1000;
+const UPDATES_URL = 'https://raw.githubusercontent.com/brianvoit/jira-timetrack/main/updates.json';
+const ADDON_ID    = 'jira-time-helper@brianvoit';
 
 // ── DOM ────────────────────────────────────────────────────────
-const panelMain     = document.getElementById('panel-main');
-const panelSettings = document.getElementById('panel-settings');
-const btnSettings   = document.getElementById('btn-settings');
+const $ = id => document.getElementById(id);
+const panelMain     = $('panel-main');
+const panelSettings = $('panel-settings');
+const btnSettings   = $('btn-settings');
 const modelBtns     = document.querySelectorAll('.model-btn');
-const sectionGemini = document.getElementById('section-gemini');
-const sectionClaude = document.getElementById('section-claude');
-const geminiInput   = document.getElementById('gemini-key-input');
-const claudeInput   = document.getElementById('claude-key-input');
-const geminiModelInput = document.getElementById('gemini-model-input');
-const claudeModelInput = document.getElementById('claude-model-input');
-const btnSaveGemini = document.getElementById('btn-save-gemini');
-const btnSaveClaude = document.getElementById('btn-save-claude');
-const noKeyWarn     = document.getElementById('no-key-warn');
-const loading       = document.getElementById('loading');
-const fieldsEl      = document.getElementById('fields');
-const emptyStateEl  = document.getElementById('empty-state');
-const emptyMsgEl    = document.getElementById('empty-msg');
-const valKey        = document.getElementById('val-key');
-const valSum        = document.getElementById('val-summary');
-const valDesc       = document.getElementById('val-desc');
-const aiResult      = document.getElementById('ai-result');
-const modelBadge    = document.getElementById('model-badge');
-const btnCopyAI     = document.getElementById('btn-copy-ai');
-const btnCopyRaw    = document.getElementById('btn-copy-raw');
-const btnRefresh      = document.getElementById('btn-refresh');
-const statusEl        = document.getElementById('status');
-const versionDisplay  = document.getElementById('version-display');
-const btnCheckUpdate  = document.getElementById('btn-check-update');
-const updateStatusEl  = document.getElementById('update-status');
+const sectionGemini = $('section-gemini');
+const sectionClaude = $('section-claude');
+const geminiInput   = $('gemini-key-input');
+const claudeInput   = $('claude-key-input');
+const geminiModelInput = $('gemini-model-input');
+const claudeModelInput = $('claude-model-input');
+const btnSaveGemini = $('btn-save-gemini');
+const btnSaveClaude = $('btn-save-claude');
+const goalInput     = $('goal-input');
+const showButtonInput = $('show-button-input');
+const noKeyWarn     = $('no-key-warn');
+const loading       = $('loading');
+const fieldsEl      = $('fields');
+const emptyStateEl  = $('empty-state');
+const emptyMsgEl    = $('empty-msg');
+const valKey        = $('val-key');
+const valSum        = $('val-summary');
+const valDesc       = $('val-desc');
+const aiResult      = $('ai-result');
+const modelBadge    = $('model-badge');
+const btnStartPm    = $('btn-start-pm');
+const btnCopyAI     = $('btn-copy-ai');
+const btnCopyRaw    = $('btn-copy-raw');
+const btnRefresh    = $('btn-refresh');
+const statusEl      = $('status');
+const pmEl          = $('pm-status');
+const versionDisplay = $('version-display');
+const btnCheckUpdate = $('btn-check-update');
+const updateStatusEl = $('update-status');
 
 let currentData    = {};
 let currentSummary = '';
+let currentTabId   = null;
 let settingsOpen   = false;
 let selectedModel  = 'gemini'; // provider: 'gemini' | 'claude'
 
-geminiModelInput.placeholder = DEFAULT_MODELS.gemini;
-claudeModelInput.placeholder = DEFAULT_MODELS.claude;
+geminiModelInput.placeholder = AI.DEFAULT_MODELS.gemini;
+claudeModelInput.placeholder = AI.DEFAULT_MODELS.claude;
 
 // ── Settings: model picker ─────────────────────────────────────
 modelBtns.forEach(btn => {
@@ -96,17 +87,19 @@ function makeSaveHandler(inputEl, storageKey, btn) {
 makeSaveHandler(geminiInput, 'geminiApiKey', btnSaveGemini);
 makeSaveHandler(claudeInput, 'claudeApiKey', btnSaveClaude);
 
-// ── Settings: model ID overrides (saved on change; blank = default) ──
-function makeModelHandler(inputEl, storageKey) {
+// Fields saved on change (blank = default).
+function saveOnChange(inputEl, storageKey, read = el => el.value.trim()) {
   inputEl.addEventListener('change', async () => {
-    await browser.storage.local.set({ [storageKey]: inputEl.value.trim() });
+    await browser.storage.local.set({ [storageKey]: read(inputEl) });
     inputEl.classList.add('saved');
     setTimeout(() => inputEl.classList.remove('saved'), 1200);
   });
 }
 
-makeModelHandler(geminiModelInput, 'geminiModel');
-makeModelHandler(claudeModelInput, 'claudeModel');
+saveOnChange(geminiModelInput, 'geminiModel');
+saveOnChange(claudeModelInput, 'claudeModel');
+saveOnChange(goalInput, 'dailyGoalHours', el => Number(el.value) || 7);
+showButtonInput.addEventListener('change', () => browser.storage.local.set({ showJiraButton: showButtonInput.checked }));
 
 btnSettings.addEventListener('click', () => {
   settingsOpen = !settingsOpen;
@@ -117,15 +110,17 @@ btnSettings.addEventListener('click', () => {
 
 // ── Init: restore saved settings ──────────────────────────────
 (async () => {
-  const stored = await browser.storage.local.get(
-    ['geminiApiKey', 'claudeApiKey', 'selectedModel', 'geminiModel', 'claudeModel']
+  const s = await browser.storage.local.get(
+    ['geminiApiKey', 'claudeApiKey', 'selectedModel', 'geminiModel', 'claudeModel', 'dailyGoalHours', 'showJiraButton']
   );
-  if (stored.geminiApiKey) geminiInput.value = stored.geminiApiKey;
-  if (stored.claudeApiKey) claudeInput.value = stored.claudeApiKey;
-  if (stored.geminiModel)  geminiModelInput.value = stored.geminiModel;
-  if (stored.claudeModel)  claudeModelInput.value = stored.claudeModel;
-  if (stored.selectedModel) {
-    selectedModel = stored.selectedModel;
+  if (s.geminiApiKey) geminiInput.value = s.geminiApiKey;
+  if (s.claudeApiKey) claudeInput.value = s.claudeApiKey;
+  if (s.geminiModel)  geminiModelInput.value = s.geminiModel;
+  if (s.claudeModel)  claudeModelInput.value = s.claudeModel;
+  goalInput.value = s.dailyGoalHours || 7;
+  showButtonInput.checked = s.showJiraButton !== false;
+  if (s.selectedModel) {
+    selectedModel = s.selectedModel;
     modelBtns.forEach(b => b.classList.toggle('active', b.dataset.model === selectedModel));
     sectionGemini.classList.toggle('active', selectedModel === 'gemini');
     sectionClaude.classList.toggle('active', selectedModel === 'claude');
@@ -173,16 +168,6 @@ function setAiState(state, text = '') {
   }
 }
 
-function isJiraUrl(url) {
-  return (
-    /atlassian\.net/i.test(url) ||
-    /\/browse\/[A-Z]/i.test(url) ||
-    /\/secure\/RapidBoard\.jspa/i.test(url) ||
-    /\/jira\/software\/.*\/boards\//i.test(url) ||
-    /\/projects\/[^/]+\/issues\/[A-Z]/i.test(url)
-  );
-}
-
 function buildRawText() {
   const parts = [];
   if (currentData.key)         parts.push(`Ticket:    ${currentData.key}`);
@@ -191,166 +176,11 @@ function buildRawText() {
   return parts.join('\n');
 }
 
-function buildPrompt(data) {
-  return `You are a time-tracking assistant. A developer is logging work in a tool like Harvest or Toggl.
-
-Given this Jira issue, write a time entry in exactly this format:
-{description of work done} (${data.key || 'TICKET'})
-
-Rules:
-- The description should be a short, plain-English phrase describing the work
-- Give strong preference to the task TITLE/SUMMARY when forming the description — use its wording where possible
-- Use the description/acceptance criteria only to add specifics (e.g. which pages, which components)
-- Do NOT start with a verb — write it as a noun phrase (e.g. "SEO work on Page 1 and Page 2")
-- No jargon, no ticket metadata, no quotes
-- Return ONLY the final formatted string. Nothing else.
-
-Example output: SEO work on Page 1, Page 2, and Page 3 (PROJECT-135)
-
-Ticket: ${data.key || 'N/A'}
-Summary: ${data.summary || 'N/A'}
-Description: ${data.description || 'N/A'}`;
-}
-
-// ── Result cache (persists across popup opens) ─────────────────
-// Keyed on provider + model + ticket + a hash of the ticket text, so an edited
-// ticket or a model change produces a fresh result.
-function hashText(s) {
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
-  return (h >>> 0).toString(36);
-}
-
-function cacheKey(data, provider, modelId) {
-  const text = `${data.summary || ''}\n${data.description || ''}`;
-  return `${provider}:${modelId}:${data.key || ''}:${hashText(text)}`;
-}
-
-async function getCached(key) {
-  const { aiCache = {} } = await browser.storage.local.get('aiCache');
-  const entry = aiCache[key];
-  return entry && Date.now() - entry.t < CACHE_TTL_MS ? entry.text : null;
-}
-
-async function putCached(key, text) {
-  const { aiCache = {} } = await browser.storage.local.get('aiCache');
-  aiCache[key] = { text, t: Date.now() };
-  const now = Date.now();
-  const kept = Object.entries(aiCache)
-    .filter(([, v]) => now - v.t < CACHE_TTL_MS)
-    .sort((a, b) => b[1].t - a[1].t)
-    .slice(0, CACHE_MAX);
-  await browser.storage.local.set({ aiCache: Object.fromEntries(kept) });
-}
-
-// ── Network helpers ────────────────────────────────────────────
-class ApiError extends Error {
-  constructor(message, status) {
-    super(message);
-    this.status = status;
-  }
-}
-
-async function readApiError(resp) {
-  const body = await resp.json().catch(() => ({}));
-  return new ApiError(body?.error?.message || `HTTP ${resp.status}`, resp.status);
-}
-
-async function fetchWithTimeout(url, options, ms = 10000) {
-  const ctrl = new AbortController();
-  const id = setTimeout(() => ctrl.abort(), ms);
-  try {
-    return await fetch(url, { ...options, signal: ctrl.signal });
-  } catch (e) {
-    if (e.name === 'AbortError') throw new Error('Request timed out — try again.');
-    throw e;
-  } finally {
-    clearTimeout(id);
-  }
-}
-
-// ── API calls ──────────────────────────────────────────────────
-async function callGemini(prompt, apiKey, modelId) {
-  const resp = await fetchWithTimeout(`${GEMINI_BASE}/${encodeURIComponent(modelId)}:generateContent`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': apiKey
-    },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      // Thinking tokens count toward this limit on Gemini 3.x, so leave headroom.
-      generationConfig: { maxOutputTokens: 1024 }
-    })
-  }, AI_TIMEOUT_MS);
-  if (!resp.ok) throw await readApiError(resp);
-  const result = await resp.json();
-  if (result.promptFeedback?.blockReason) {
-    throw new ApiError(`Blocked by Gemini safety filter (${result.promptFeedback.blockReason}).`);
-  }
-  const parts = result.candidates?.[0]?.content?.parts || [];
-  return parts.filter(p => !p.thought && p.text).map(p => p.text).join('').trim() || null;
-}
-
-async function callClaude(prompt, apiKey, modelId) {
-  const resp = await fetchWithTimeout(CLAUDE_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true'
-    },
-    body: JSON.stringify({
-      model: modelId,
-      max_tokens: 200,
-      messages: [{ role: 'user', content: prompt }]
-    })
-  }, AI_TIMEOUT_MS);
-  if (!resp.ok) throw await readApiError(resp);
-  const result = await resp.json();
-  return (result.content || [])
-    .filter(b => b.type === 'text')
-    .map(b => b.text)
-    .join('')
-    .trim() || null;
-}
-
-// Calls the given provider, retrying once on rate-limit / overload / 5xx.
-async function callAI(provider, data, apiKey, modelId) {
-  const prompt = buildPrompt(data);
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      return provider === 'claude'
-        ? await callClaude(prompt, apiKey, modelId)
-        : await callGemini(prompt, apiKey, modelId);
-    } catch (e) {
-      if (attempt === 0 && RETRY_STATUSES.has(e.status)) {
-        setStatus(e.status === 429 ? 'Rate limited — retrying…' : 'Service busy — retrying…');
-        await new Promise(r => setTimeout(r, 1500));
-        continue;
-      }
-      throw e;
-    }
-  }
-}
-
-function friendlyError(e, modelId) {
-  const msg = e.message || 'Unknown error';
-  if (e.status === 401 || e.status === 403 || /api.key|authentication/i.test(msg)) {
-    return 'Invalid API key — check your key in ··· settings.';
-  }
-  if (e.status === 404 || /not.found|does not exist|not supported/i.test(msg)) {
-    return `Model "${modelId}" isn't available (it may have been retired). Change it in ··· settings.`;
-  }
-  if (e.status === 429) return 'Rate limited — wait a moment and hit ↻.';
-  return `Error: ${msg}`;
-}
-
 // ── Scrape + summarise ─────────────────────────────────────────
 // regenerate: skip the cached result and ask the AI for a fresh one (↻ button).
 async function scrape({ regenerate = false } = {}) {
   btnRefresh.disabled = true;
+  btnStartPm.disabled = true;
   emptyStateEl.classList.remove('visible');
   loading.style.display = 'flex';
   fieldsEl.style.display = 'none';
@@ -362,25 +192,21 @@ async function scrape({ regenerate = false } = {}) {
 
   const tab = tabs[0];
   if (!tab) { showError('Could not access the current tab.'); return; }
+  currentTabId = tab.id;
 
-  if (!tab.url || !isJiraUrl(tab.url)) {
+  if (!tab.url || !JiraUrl.isJiraUrl(tab.url)) {
     showEmptyState('Open a Jira issue or board page first.'); return;
   }
-  if (/RapidBoard|boards/i.test(tab.url) && !/selectedIssue=/i.test(tab.url)) {
+  if (!JiraUrl.issueKeyFromUrl(tab.url)) {
     showEmptyState('Click on an issue on the board first, then try again.'); return;
   }
-
-  // Confirmed Jira — light up the toolbar badge
-  try {
-    browser.browserAction.setBadgeText({ tabId: tab.id, text: '●' });
-    browser.browserAction.setBadgeBackgroundColor({ tabId: tab.id, color: '#16a34a' });
-  } catch {}
 
   let data;
   try {
     data = await browser.tabs.sendMessage(tab.id, { type: 'SCRAPE_JIRA' });
   } catch {
     try {
+      await browser.tabs.executeScript(tab.id, { file: 'lib/jira.js' });
       await browser.tabs.executeScript(tab.id, { file: 'content.js' });
       data = await browser.tabs.sendMessage(tab.id, { type: 'SCRAPE_JIRA' });
     } catch { showError('Could not read the page. Try refreshing.'); return; }
@@ -393,18 +219,12 @@ async function scrape({ regenerate = false } = {}) {
 
   loading.style.display = 'none';
   fieldsEl.style.display = 'block';
+  btnStartPm.disabled = !currentData.key;
 
-  const stored = await browser.storage.local.get(
-    ['geminiApiKey', 'claudeApiKey', 'selectedModel', 'geminiModel', 'claudeModel']
-  );
-  const provider = stored.selectedModel || selectedModel;
-  selectedModel  = provider;
-  const apiKey   = provider === 'claude' ? stored.claudeApiKey : stored.geminiApiKey;
-  const modelId  = (provider === 'claude' ? stored.claudeModel : stored.geminiModel) || DEFAULT_MODELS[provider];
-
-  if (!apiKey) {
+  const cfg = await AI.getConfig();
+  if (!cfg.apiKey) {
     noKeyWarn.style.display = 'block';
-    setAiState('error', `Add a ${PROVIDER_NAMES[provider]} API key in ··· settings.`);
+    setAiState('error', `Add a ${AI.PROVIDER_NAMES[cfg.provider]} API key in ··· settings.`);
     btnRefresh.disabled = false;
     return;
   }
@@ -416,32 +236,16 @@ async function scrape({ regenerate = false } = {}) {
     return;
   }
 
-  modelBadge.textContent = modelId;
-  modelBadge.title = `${PROVIDER_NAMES[provider]} · ${modelId}`;
-
-  const ck = cacheKey(currentData, provider, modelId);
-  if (!regenerate) {
-    const cached = await getCached(ck).catch(() => null);
-    if (cached) {
-      setAiState('ready', cached);
-      setStatus('AI summary ready', 'success');
-      btnRefresh.disabled = false;
-      return;
-    }
-  }
+  modelBadge.textContent = cfg.modelId;
+  modelBadge.title = `${AI.PROVIDER_NAMES[cfg.provider]} · ${cfg.modelId}`;
 
   setAiState('loading');
   try {
-    const summary = await callAI(provider, currentData, apiKey, modelId);
-    if (summary) {
-      setAiState('ready', summary);
-      setStatus('AI summary ready', 'success');
-      putCached(ck, summary).catch(() => {});
-    } else {
-      setAiState('error', 'Empty response — hit ↻ to try again.');
-    }
+    const res = await AI.generateEntry(currentData, { regenerate, onStatus: msg => setStatus(msg) });
+    setAiState('ready', res.text);
+    setStatus('AI summary ready', 'success');
   } catch (e) {
-    setAiState('error', friendlyError(e, modelId));
+    setAiState('error', AI.friendlyError(e));
   } finally {
     btnRefresh.disabled = false;
   }
@@ -463,6 +267,81 @@ function showEmptyState(msg) {
   fieldsEl.style.display = 'none';
   emptyStateEl.classList.add('visible');
   emptyMsgEl.textContent = msg;
+}
+
+// ── PM: start timer (handed to the on-page button, which handles project choice) ──
+btnStartPm.addEventListener('click', async () => {
+  if (currentTabId == null) return;
+  try {
+    await browser.tabs.sendMessage(currentTabId, { type: 'WIDGET_START', note: currentSummary || undefined });
+    window.close();
+  } catch {
+    setStatus('Could not reach the page — refresh it and try again.', 'error');
+  }
+});
+
+// ── PM: today's hours, running timer, warnings ────────────────
+const fmtElapsed = ms => {
+  const m = Math.max(0, Math.floor(ms / 60000));
+  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
+};
+
+function pmLine(text, cls) {
+  const d = document.createElement('div');
+  d.className = cls || 'pm-line';
+  d.textContent = text;
+  pmEl.appendChild(d);
+  return d;
+}
+
+async function loadPmStatus() {
+  pmEl.textContent = '';
+  const [res, { dailyGoalHours }] = await Promise.all([
+    browser.runtime.sendMessage({ type: 'PM_STATUS' }).catch(e => ({ error: String(e) })),
+    browser.storage.local.get('dailyGoalHours'),
+  ]);
+  const goal = Number(dailyGoalHours) || 7;
+
+  if (!res?.status) {
+    const d = pmLine(res?.signIn ? 'PM: not signed in. ' : `PM: ${res?.error || 'unavailable'}`, 'pm-line muted');
+    if (res?.signIn) {
+      const a = document.createElement('a');
+      a.textContent = 'Open PM';
+      a.addEventListener('click', () => browser.runtime.sendMessage({ type: 'PM_OPEN' }).then(() => window.close()));
+      d.appendChild(a);
+    }
+    return;
+  }
+  const s = res.status;
+  const today = s.todayBillableHours;
+
+  const head = pmLine('', 'pm-head');
+  const label = document.createElement('span'); label.textContent = 'Today';
+  const val = document.createElement('strong');
+  val.textContent = `${today == null ? '—' : today.toFixed(1)} / ${goal} h`;
+  head.append(label, val);
+  const bar = document.createElement('div'); bar.className = 'pm-bar';
+  const fill = document.createElement('i'); fill.style.width = `${Math.min(100, ((today || 0) / goal) * 100)}%`;
+  if ((today || 0) >= goal) fill.classList.add('done');
+  bar.appendChild(fill); pmEl.appendChild(bar);
+
+  if (s.running.length) {
+    s.running.forEach(r => pmLine(
+      `● ${r.note || r.projectName}${r.startedAt ? ` · ${fmtElapsed(Date.now() - r.startedAt)}` : ''}`,
+      'pm-line running'));
+  } else {
+    pmLine('No timer running.', 'pm-line muted');
+  }
+  s.running.filter(r => r.runaway).forEach(r => pmLine(
+    `Running since ${new Date(r.startedAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })} — is that right?`,
+    'pm-line warn'));
+  s.longSegments.forEach(l => pmLine(
+    `${Math.round(l.minutes / 60)} h segment on ${l.note || l.projectName} (${l.start.slice(5, 16)} → ${l.stop.slice(5, 16)}) — check before invoicing.`,
+    'pm-line warn'));
+  if (s.emptyNotesToday.length) {
+    pmLine(`${s.emptyNotesToday.length} entr${s.emptyNotesToday.length === 1 ? 'y' : 'ies'} from today without a note: ` +
+      s.emptyNotesToday.map(e => e.projectName).join(', '), 'pm-line warn');
+  }
 }
 
 // ── Copy ───────────────────────────────────────────────────────
@@ -511,7 +390,7 @@ btnCheckUpdate.addEventListener('click', async () => {
   updateStatusEl.textContent = '';
 
   try {
-    const resp = await fetchWithTimeout(UPDATES_URL, {}, 8000);
+    const resp = await AI.fetchWithTimeout(UPDATES_URL, {}, 8000);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
     const updates = data?.addons?.[ADDON_ID]?.updates || [];
@@ -550,3 +429,4 @@ btnCheckUpdate.addEventListener('click', async () => {
 });
 
 scrape();
+loadPmStatus();
