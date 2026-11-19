@@ -329,6 +329,13 @@
 
     if (knownClient) {
       const candidates = projects.filter(p => p.client === knownClient);
+      // "TIMER: SEO" on the ticket names the timer within the client.
+      const hint = AI.timerHint(issue);
+      if (hint && candidates.length > 1) {
+        const h = norm(hint);
+        const hinted = candidates.filter(p => norm(p.name).includes(h) || norm(p.parents[0]).includes(h));
+        if (hinted.length === 1) return { project: hinted[0], how: `TIMER: ${hint} on the ticket` };
+      }
       let pickedId = candidates.length === 1 ? candidates[0].id : null;
       if (!pickedId) pickedId = await AI.pickProject(issue, candidates).catch(() => null);
       if (!pickedId && remembered && candidates.some(p => p.id === remembered.projectId)) pickedId = remembered.projectId;

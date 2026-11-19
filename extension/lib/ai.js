@@ -76,7 +76,17 @@
     return parts.filter(p => !p.thought && p.text).map(p => p.text).join('').trim() || null;
   }
 
-  async function callClaude(prompt, apiKey, modelId, maxTokens) {
+  // Older Claude models reject the `effort` setting.
+  const claudeSupportsEffort = id => !/claude-(3|haiku-4|sonnet-4-5|sonnet-4-0|opus-4-0|opus-4-1)/.test(id);
+
+  // Claude Haiku 5.5 (and other current models) think before answering, and that
+  // thinking counts toward max_tokens. So: low effort for these short tasks, a
+  // max_tokens with room for thinking + answer, and (when `schema` is given)
+  // structured output so the reply is always parseable JSON.
+  async function callClaude(prompt, apiKey, modelId, maxTokens, schema) {
+    const outputConfig = {};
+    if (claudeSupportsEffort(modelId)) outputConfig.effort = 'low';
+    if (schema) outputConfig.format = { type: 'json_schema', schema };
     const resp = await fetchWithTimeout(CLAUDE_URL, {
       method: 'POST',
       headers: {
@@ -87,21 +97,31 @@
       },
       body: JSON.stringify({
         model: modelId,
-        max_tokens: maxTokens,
+        max_tokens: Math.max(maxTokens, 2048),
+        ...(Object.keys(outputConfig).length ? { output_config: outputConfig } : {}),
         messages: [{ role: 'user', content: prompt }]
       })
     }, AI_TIMEOUT_MS);
     if (!resp.ok) throw await readApiError(resp);
     const result = await resp.json();
-    return (result.content || [])
+    if (result.stop_reason === 'refusal') {
+      throw new ApiError("Claude declined this request (safety filter). Try again, or switch to Gemini in ··· settings.");
+    }
+    // Responses can start with `thinking` blocks — read text blocks by type.
+    const text = (result.content || [])
       .filter(b => b.type === 'text')
       .map(b => b.text)
       .join('')
-      .trim() || null;
+      .trim();
+    if (!text && result.stop_reason === 'max_tokens') {
+      throw new ApiError('Claude ran out of room before answering — try again.');
+    }
+    return text || null;
   }
 
   // Calls the configured provider, retrying once on rate-limit / overload / 5xx.
-  async function complete(prompt, { maxTokens = 200, onStatus } = {}) {
+  // `schema`: JSON schema for Claude structured output (Gemini returns plain text).
+  async function complete(prompt, { maxTokens = 200, onStatus, schema } = {}) {
     const cfg = await getConfig();
     if (!cfg.apiKey) {
       throw new ApiError(`Add a ${PROVIDER_NAMES[cfg.provider]} API key in ··· settings.`, 'no-key');
@@ -109,9 +129,9 @@
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const text = cfg.provider === 'claude'
-          ? await callClaude(prompt, cfg.apiKey, cfg.modelId, maxTokens)
+          ? await callClaude(prompt, cfg.apiKey, cfg.modelId, maxTokens, schema)
           : await callGemini(prompt, cfg.apiKey, cfg.modelId, maxTokens);
-        return { text, ...cfg };
+        return { text, structured: cfg.provider === 'claude' && !!schema, ...cfg };
       } catch (e) {
         if (attempt === 0 && RETRY_STATUSES.has(e.status)) {
           onStatus?.(e.status === 429 ? 'Rate limited — retrying…' : 'Service busy — retrying…');
@@ -138,33 +158,60 @@
   }
 
   // ── Time entry text ─────────────────────────────────────────
+  // "TIMER: SEO"-style lines in a ticket say which PM timer to use; they aren't work.
+  const TIMER_LINE = /^\s*TIMER\s*:\s*(.+?)\s*$/im;
+  const timerHint = issue => (issue.description || '').match(TIMER_LINE)?.[1] || null;
+  const withoutTimerLines = text => (text || '').replace(new RegExp(TIMER_LINE.source, 'gim'), '').trim();
+
+  // The final entry is ALWAYS exactly: "<description> (<KEY>)".
+  // The model writes only the description; code appends " (KEY)" (see cleanEntry).
   function buildEntryPrompt(issue) {
-    return `You are a time-tracking assistant. A developer is logging work in a tool like Harvest or Toggl.
+    return `You are a time-tracking assistant. A developer is logging work against a Jira ticket.
 
-Given this Jira issue, write a time entry in exactly this format:
-{description of work done} (${issue.key || 'TICKET'})
+Write the DESCRIPTION part of the time entry. The final entry will be exactly:
+<description> (${issue.key || 'TICKET-123'})
+The ticket key is added automatically — do not include it.
 
-Rules:
-- The description should be a short, plain-English phrase describing the work
-- Give strong preference to the task TITLE/SUMMARY when forming the description — use its wording where possible
-- Use the description/acceptance criteria only to add specifics (e.g. which pages, which components)
-- Do NOT start with a verb — write it as a noun phrase (e.g. "SEO work on Page 1 and Page 2")
-- No jargon, no ticket metadata, no quotes
-- Return ONLY the final formatted string. Nothing else.
+Rules for the description:
+- A short, plain-English noun phrase describing the work — do NOT start with a verb
+- Give strong preference to the ticket TITLE; use its wording where possible
+- Use the ticket description only to add specifics (e.g. which pages, which components)
+- No jargon, no ticket metadata, no labels like "PROPOSING:" or "TIMER:", no quotes, no trailing period
+- One line
 
-Example output: SEO work on Page 1, Page 2, and Page 3 (PROJECT-135)
+Example description: SEO work on Page 1, Page 2, and Page 3
 
-Ticket: ${issue.key || 'N/A'}
-Summary: ${issue.summary || 'N/A'}
-Description: ${issue.description || 'N/A'}`;
+Ticket title: ${issue.summary || 'N/A'}
+Ticket description: ${withoutTimerLines(issue.description) || 'N/A'}`;
   }
 
-  // Tidies the model's output and guarantees it ends with the real ticket key,
-  // whatever the model did with it.
+  const ENTRY_SCHEMA = {
+    type: 'object',
+    properties: {
+      description: { type: 'string', description: 'The time entry description: a short noun phrase, without the ticket key.' },
+    },
+    required: ['description'],
+    additionalProperties: false,
+  };
+
+  // Reads the description out of a model reply (JSON for Claude, text for Gemini).
+  function descriptionFrom(res) {
+    if (res.structured) {
+      try { return JSON.parse(res.text || '{}').description || ''; } catch { return ''; }
+    }
+    return res.text || '';
+  }
+
+  // Enforces the exact format "<description> (<KEY>)": takes the first real line,
+  // strips quotes/markdown/labels and any key the model added, then appends the real key.
   function cleanEntry(text, key) {
-    let t = (text || '').split('\n').find(l => l.trim()) || '';
-    t = t.replace(/^[\s"'`*]+|[\s"'`*.]+$/g, '').replace(/\s+/g, ' ');
-    t = t.replace(/\s*\([A-Z][A-Z0-9_]+-\d+\)\s*$/i, '').replace(/[\s.]+$/, '');
+    const lines = (text || '').split('\n').map(l => l.trim()).filter(l => l && !/^```/.test(l));
+    let t = lines[0] || '';
+    t = t.replace(/^(description|time entry|entry)\s*:\s*/i, '');
+    t = t.replace(/^[\s"'`*_-]+|[\s"'`*_.]+$/g, '').replace(/\s+/g, ' ');
+    t = t.replace(/\s*\([A-Z][A-Z0-9_]+-\d+\)\s*$/, '');                     // "(ABC-12)" the model added
+    if (key) t = t.replace(new RegExp(`[\\s(-]*\\b${key}\\b\\)?\\s*$`, 'i'), ''); // bare "ABC-12" at the end
+    t = t.replace(/[\s.,;:-]+$/, '');
     if (!t) return null;
     return key ? `${t} (${key})` : t;
   }
@@ -212,27 +259,37 @@ Description: ${issue.description || 'N/A'}`;
       const cached = await getCached(ck).catch(() => null);
       if (cached) return { text: cached, cached: true, modelId: (await getConfig()).modelId };
     }
-    const res = await complete(buildEntryPrompt(issue), { maxTokens: 200, onStatus });
-    const text = cleanEntry(res.text, issue.key);
-    if (!text) throw new ApiError('Empty response — try again.');
+    const res = await complete(buildEntryPrompt(issue), { maxTokens: 2048, onStatus, schema: ENTRY_SCHEMA });
+    const text = cleanEntry(descriptionFrom(res), issue.key);
+    if (!text) throw new ApiError('The AI returned no description — hit ↻ to try again.');
     putCached(ck, text).catch(() => {});
     return { text, cached: false, modelId: res.modelId };
   }
 
   // ── Best-fit PM project ─────────────────────────────────────
   // candidates: [{ id, name, client, parents: [..] }]. Returns a candidate id or null.
+  const PICK_SCHEMA = {
+    type: 'object',
+    properties: {
+      project: { type: 'integer', description: 'Number of the best project timer, or 0 if none fits.' },
+    },
+    required: ['project'],
+    additionalProperties: false,
+  };
+
   async function pickProject(issue, candidates) {
     if (!candidates.length) return null;
     if (candidates.length === 1) return candidates[0].id;
     const list = candidates.map((p, i) =>
       `${i + 1}. ${p.name} — ${[...p.parents].reverse().join(' / ')} — client: ${p.client}`
     ).join('\n');
+    const hint = timerHint(issue);
     const prompt = `A developer at a digital agency is about to start a timer for this Jira ticket. Pick the project timer the work should be logged against.
 
 Jira ticket: ${issue.key}
 Jira project: ${issue.projectName || issue.projectKey || 'unknown'}
 Title: ${issue.summary || 'N/A'}
-Description: ${(issue.description || 'N/A').slice(0, 1200)}
+${hint ? `The ticket says which timer to use: "TIMER: ${hint}" — follow it.\n` : ''}Description: ${withoutTimerLines(issue.description).slice(0, 1200) || 'N/A'}
 
 Project timers:
 ${list}
@@ -240,15 +297,17 @@ ${list}
 Rules:
 - Match the client first, then the service (e.g. Google Ads vs Microsoft Ads vs SEO vs website/CMS support) that best fits the ticket's work.
 - Reply with ONLY the number of the best project. If none plausibly fits, reply 0.`;
-    const res = await complete(prompt, { maxTokens: 10 });
-    const n = parseInt((res.text || '').match(/\d+/)?.[0] || '0', 10);
+    const res = await complete(prompt, { maxTokens: 1024, schema: PICK_SCHEMA });
+    let n = 0;
+    if (res.structured) { try { n = Number(JSON.parse(res.text || '{}').project) || 0; } catch { n = 0; } }
+    else n = parseInt((res.text || '').match(/\d+/)?.[0] || '0', 10);
     return n >= 1 && n <= candidates.length ? candidates[n - 1].id : null;
   }
 
   globalThis.AI = {
     DEFAULT_MODELS, PROVIDER_NAMES, ApiError,
     getConfig, complete, friendlyError,
-    generateEntry, cleanEntry, fallbackEntry, pickProject,
+    generateEntry, cleanEntry, fallbackEntry, pickProject, timerHint,
     fetchWithTimeout,
   };
 })();
