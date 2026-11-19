@@ -146,7 +146,7 @@ btnSettings.addEventListener('click', () => {
 let pmRunning = [];
 function updateEntryCard() {
   const key = (currentData.key || '').toUpperCase();
-  const timingThis = !!key && pmRunning.some(r => (r.note || '').toUpperCase().includes(`(${key})`));
+  const timingThis = !!key && pmRunning.some(r => JiraUrl.keysInNote(r.note).includes(key));
   entryCard.style.display = timingThis ? 'none' : '';
 }
 
@@ -355,9 +355,32 @@ async function loadPmStatus() {
   s.running.filter(r => r.runaway).forEach(r => pmLine(
     `Running since ${new Date(r.startedAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })} — is that right?`,
     'pm-line warn'));
-  if (s.emptyNotesToday.length) {
-    pmLine(`${s.emptyNotesToday.length} entr${s.emptyNotesToday.length === 1 ? 'y' : 'ies'} from today without a note: ` +
-      s.emptyNotesToday.map(e => e.projectName).join(', '), 'pm-line warn');
+  // Blank timers (started in PM without a note) get filled at the end of the day;
+  // this button does it now.
+  const blanks = s.emptyNotesToday.length;
+  if (blanks) {
+    const btn = document.createElement('button');
+    btn.className = 'action fill-btn';
+    btn.textContent = `Fill ${blanks} blank timer${blanks === 1 ? '' : 's'} from today's tickets`;
+    btn.title = 'Writes a note on PM entries from today that have no note, using the Jira tickets you touched for that client.';
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.textContent = 'Filling…';
+      const r = await browser.runtime.sendMessage({ type: 'FILL_BLANKS' }).catch(e => ({ error: String(e) }));
+      if (r?.error) {
+        btn.disabled = false;
+        btn.textContent = 'Try again';
+        setStatus(r.error, 'error');
+        return;
+      }
+      await loadPmStatus();
+      loadTodayList();
+      r.filled.forEach(f => pmLine(`✓ ${f.projectName}: ${f.note}`, 'pm-line filled'));
+      if (r.left.length) {
+        pmLine(`No matching Jira ticket for: ${r.left.map(l => l.projectName).join(', ')}`, 'pm-line muted');
+      }
+    });
+    pmEl.appendChild(btn);
   }
 }
 
@@ -385,14 +408,10 @@ async function loadTodayList() {
   const { tickets } = res;
   if (!tickets.length && res.jiraAvailable) return;
 
-  const gaps = tickets.filter(t => !t.pmMinutes && !t.running);
   const head = document.createElement('div');
   head.className = 't-head';
   const h = document.createElement('span'); h.textContent = 'Jira tickets today';
-  const c = document.createElement('span');
-  c.className = gaps.length ? 't-count warn' : 't-count';
-  c.textContent = tickets.length ? (gaps.length ? `${gaps.length} without PM time` : 'all have PM time') : '';
-  head.append(h, c);
+  head.append(h);
   todayEl.appendChild(head);
 
   if (!res.jiraAvailable) {
@@ -406,7 +425,7 @@ async function loadTodayList() {
   list.className = 't-list';
   tickets.forEach(t => {
     const row = document.createElement('div');
-    row.className = 't-row' + (!t.pmMinutes && !t.running ? ' gap' : '') + (t.running ? ' running' : '');
+    row.className = 't-row' + (t.running ? ' running' : '');
 
     const main = document.createElement('div');
     main.className = 't-main';
@@ -424,7 +443,7 @@ async function loadTodayList() {
     side.className = 't-side';
     const time = document.createElement('span');
     time.className = 't-time';
-    time.textContent = t.running ? `● ${fmtMinutes(t.pmMinutes) || 'now'}` : (t.pmMinutes ? fmtMinutes(t.pmMinutes) : 'no PM time');
+    time.textContent = t.running ? `● ${fmtMinutes(t.pmMinutes) || 'now'}` : (t.pmMinutes ? fmtMinutes(t.pmMinutes) : '—');
     side.appendChild(time);
 
     if (!t.running && t.base) {

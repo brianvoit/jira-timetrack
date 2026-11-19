@@ -41,5 +41,16 @@
     return (issueKey || '').split('-')[0].toUpperCase();
   }
 
-  globalThis.JiraUrl = { issueKeyFromUrl, isBoardUrl, isJiraUrl, projectKeyOf };
+  // Jira keys a PM note refers to: "Work (MARY-53)" → [MARY-53];
+  // "Combined work (MARY-53, MARY-15)" → [MARY-53, MARY-15]. Only parenthesised key lists count.
+  const KEY_LIST = /^\s*[A-Z][A-Z0-9_]+-\d+(?:\s*,\s*[A-Z][A-Z0-9_]+-\d+)*\s*$/i;
+  function keysInNote(note) {
+    const keys = [];
+    for (const m of String(note || '').matchAll(/\(([^()]*)\)/g)) {
+      if (KEY_LIST.test(m[1])) m[1].split(',').forEach(k => keys.push(k.trim().toUpperCase()));
+    }
+    return [...new Set(keys)];
+  }
+
+  globalThis.JiraUrl = { issueKeyFromUrl, isBoardUrl, isJiraUrl, projectKeyOf, keysInNote };
 })();

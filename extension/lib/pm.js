@@ -237,22 +237,28 @@
       };
     });
     const localToday = `${midnight.getFullYear()}-${String(midnight.getMonth() + 1).padStart(2, '0')}-${String(midnight.getDate()).padStart(2, '0')}`;
-    const emptyNotesToday = timers.entries.filter(e =>
-      !e.note && e.segments.some(s => s.start.startsWith(localToday) || (s.stop || '').startsWith(localToday))
-    ).map(e => ({ id: e.id, projectName: e.projectName, client: e.client }));
-    // Minutes logged today per Jira key, from notes ending in "(KEY-123)".
-    const minutesByKey = {};
     const midMs = midnight.getTime();
-    timers.entries.forEach(e => {
-      const keys = [...e.note.matchAll(/\(([A-Z][A-Z0-9_]+-\d+)\)/gi)].map(m => m[1].toUpperCase());
-      if (!keys.length) return;
-      let ms = 0;
+    // Minutes an entry has today, and when its first segment today started.
+    function today(e) {
+      let ms = 0, first = null;
       e.segments.forEach(s => {
         const a = parseLocalDate(s.start).getTime();
         const b = s.stop ? parseLocalDate(s.stop).getTime() : now; // open segment = running
-        ms += Math.max(0, Math.min(b, now) - Math.max(a, midMs));
+        const overlap = Math.min(b, now) - Math.max(a, midMs);
+        if (overlap > 0) { ms += overlap; first = Math.min(first ?? Infinity, Math.max(a, midMs)); }
       });
-      const mins = Math.round(ms / 60000);
+      return { minutes: Math.round(ms / 60000), firstStart: first };
+    }
+    // Entries with time today but no note — what end-of-day fill-in completes.
+    const emptyNotesToday = timers.entries
+      .filter(e => !e.note && e.segments.some(s => s.start.startsWith(localToday) || (s.stop || '').startsWith(localToday)))
+      .map(e => ({ id: e.id, projectId: e.projectId, projectName: e.projectName, client: e.client, running: e.running, ...today(e) }));
+    // Minutes logged today per Jira key, from notes ending in "(KEY-123)" or "(KEY-1, KEY-2)".
+    const minutesByKey = {};
+    timers.entries.forEach(e => {
+      const keys = JiraUrl.keysInNote(e.note);
+      if (!keys.length) return;
+      const mins = today(e).minutes;
       keys.forEach(k => { minutesByKey[k] = (minutesByKey[k] || 0) + mins; });
     });
 
@@ -325,6 +331,43 @@
     return score;
   }
 
+  // Which PM client a Jira issue belongs to — from remembered choices, past PM notes for
+  // this Jira project, and name matching. No AI. client is null when unclear.
+  async function clientForIssue(issue, status, projects) {
+    projects = projects || await getProjects();
+    const byId = Object.fromEntries(projects.map(p => [p.id, p]));
+    const { pmMap = {} } = await browser.storage.local.get('pmMap');
+    const remembered = pmMap[issue.projectKey] || null;
+    const history = (status?.entries || []).filter(e =>
+      byId[e.projectId] && JiraUrl.keysInNote(e.note).some(k => JiraUrl.projectKeyOf(k) === issue.projectKey));
+
+    const clientVotes = {};
+    const vote = (client, n) => { if (client) clientVotes[client] = (clientVotes[client] || 0) + n; };
+    if (remembered && byId[remembered.projectId]) vote(byId[remembered.projectId].client, 5);
+    history.forEach(e => vote(byId[e.projectId].client, 2));
+    projects.forEach(p => vote(p.client, clientScore(p, issue)));
+
+    const ranked = Object.entries(clientVotes).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+    const client = ranked.length && (ranked.length === 1 || ranked[0][1] > ranked[1][1]) ? ranked[0][0] : null;
+    return { client, remembered, history };
+  }
+
+  // Write notes on several entries in one save (Refresh / Save). Only the given notes change.
+  async function setNotes(notesById) {
+    const ids = Object.keys(notesById);
+    if (!ids.length) return null;
+    const timers = await getTimers();
+    const overrides = {};
+    ids.forEach(id => {
+      if (!timers.entries.some(e => e.id === id)) throw new Error('A PM entry is no longer on the Timers page.');
+      overrides[`note_${id}`] = notesById[id];
+    });
+    const after = await submit(timers, overrides, saveButton);
+    const missed = ids.filter(id => after.entries.find(e => e.id === id)?.note !== notesById[id].trim());
+    if (missed.length) throw new Error("PM didn't keep some notes — check the Timers page.");
+    return after;
+  }
+
   // Returns { project, how } when confident, or { needsChoice: true, candidates, suggestedId }.
   async function resolveProject(issue, status) {
     const projects = await getProjects();
@@ -337,20 +380,8 @@
     const named = projects.filter(p => p.name.length > 8 && text.toLowerCase().includes(p.name.toLowerCase()));
     if (named.length === 1) return { project: named[0], how: 'listed on the ticket' };
 
-    // 2. Find the client: past PM notes for this Jira project, remembered choices, name matching.
-    const { pmMap = {} } = await browser.storage.local.get('pmMap');
-    const remembered = pmMap[issue.projectKey];
-    const history = (status?.entries || []).filter(e =>
-      e.note.toUpperCase().includes(`(${issue.projectKey}-`) && byId[e.projectId]);
-
-    const clientVotes = {};
-    const vote = (client, n) => { if (client) clientVotes[client] = (clientVotes[client] || 0) + n; };
-    if (remembered && byId[remembered.projectId]) vote(byId[remembered.projectId].client, 5);
-    history.forEach(e => vote(byId[e.projectId].client, 2));
-    projects.forEach(p => vote(p.client, clientScore(p, issue)));
-
-    const ranked = Object.entries(clientVotes).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
-    const knownClient = ranked.length && (ranked.length === 1 || ranked[0][1] > ranked[1][1]) ? ranked[0][0] : null;
+    // 2. Find the client (no AI).
+    const { client: knownClient, remembered, history } = await clientForIssue(issue, status, projects);
 
     if (knownClient) {
       const candidates = projects.filter(p => p.client === knownClient);
@@ -481,7 +512,7 @@
   globalThis.PM = {
     ORIGIN, PmAuthError,
     getTimers, summarize, resumeEntry, createEntry, setEntryProject, pauseEntry,
-    getProjects, resolveProject, rememberChoice,
+    getProjects, resolveProject, rememberChoice, clientForIssue, setNotes,
     resolveEmailProject, rememberEmailChoice, externalAddresses,
     // exposed for tests
     _parseTimers: parseTimers, _formBody: formBody, _clientScore: clientScore,

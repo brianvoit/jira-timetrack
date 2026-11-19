@@ -275,6 +275,8 @@
     .pm-line { padding: 2px 0; line-height: 1.45; word-break: break-word; }
     .pm-line.running { color: var(--pm-success); font-weight: 500; }
     .pm-line.muted { color: var(--pm-text-3); }
+    .pm-line.filled { color: var(--pm-text); }
+    .fill-btn { width: 100%; margin-top: 8px; }
     .pm-line.warn {
       margin-top: 4px; padding: 6px 8px; border-radius: 8px;
       background: var(--pm-warning-soft); color: var(--pm-warning-text);
@@ -288,25 +290,18 @@
     .today-list:empty { display: none; }
     .t-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
     .t-head span:first-child { font-weight: 600; color: var(--pm-text-2); }
-    .t-count { color: var(--pm-text-3); }
-    .t-count.warn {
-      padding: 1px 8px; border-radius: 999px; font-weight: 600;
-      background: var(--pm-warning-soft); color: var(--pm-warning-text);
-    }
     .t-list { max-height: 300px; overflow-y: auto; margin: 0 -14px; }
     .t-row {
       display: flex; align-items: center; gap: 8px; padding: 7px 14px;
       border-top: 1px solid var(--pm-border);
     }
     .t-row:hover { background: var(--pm-hover); }
-    .t-row.gap { box-shadow: inset 3px 0 0 var(--pm-warning); }
     .t-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
     .t-key { font: 600 12px var(--pm-mono); color: var(--pm-accent); }
     .t-key:hover { text-decoration: underline; }
     .t-sum { color: var(--pm-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .t-side { display: flex; align-items: center; gap: 2px; flex: none; }
     .t-time { min-width: 56px; margin-right: 4px; text-align: right; color: var(--pm-text-3); font-variant-numeric: tabular-nums; }
-    .t-row.gap .t-time { color: var(--pm-warning-text); font-weight: 600; }
     .t-row.running .t-time { color: var(--pm-success); font-weight: 600; }
     .t-btn {
       width: 26px; height: 26px; border: 0; border-radius: 7px; background: transparent;
@@ -388,9 +383,9 @@
     </label>
     <p class="settings-hint">Clients are matched from email addresses only. Addresses are never sent to the AI; with this off, only the subject is.</p>
     <div class="setting-row">
-      <label class="setting-row inline"><input type="checkbox" id="eod-enabled-input" /> Daily reminder at</label>
+      <label class="setting-row inline"><input type="checkbox" id="eod-enabled-input" /> End of day at</label>
       <input class="key-input time-input" id="eod-time-input" type="time" step="900" />
-      <button class="check-update-btn" id="btn-eod-test" title="Show the reminder now">Test</button>
+      <button class="check-update-btn" id="btn-eod-test" title="Fill blank timers and show the end-of-day summary now">Run now</button>
     </div>
   </div>
 

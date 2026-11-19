@@ -49,11 +49,9 @@ async function getStatus({ force = false } = {}) {
 // opts:  { projectId?, note? } — projectId when the user picked one; note when edited in the popup.
 async function startTimer(issue, opts = {}) {
   const status = await getStatus({ force: true });
-  const tag = `(${issue.key})`;
-
   // 1. Already have an entry for this ticket? Resume it (unless the user picked a different project).
   const existing = status.entries
-    .filter(e => e.note.toUpperCase().includes(tag.toUpperCase()))
+    .filter(e => JiraUrl.keysInNote(e.note).includes(issue.key.toUpperCase()))
     .sort((a, b) => Number(b.id) - Number(a.id))[0];
   if (existing && (!opts.projectId || opts.projectId === existing.projectId)) {
     if (existing.running) return { result: 'already-running', entry: existing, status };
@@ -253,8 +251,7 @@ async function todayTickets() {
   const visits = jiraVisits[day] || {};
   const dismissed = new Set(dismissedTickets[day] || []);
   const pm = status?.minutesByKey || {};
-  const running = new Set((status?.running || []).flatMap(r =>
-    [...(r.note || '').matchAll(/\(([A-Z][A-Z0-9_]+-\d+)\)/gi)].map(m => m[1].toUpperCase())));
+  const running = new Set((status?.running || []).flatMap(r => JiraUrl.keysInNote(r.note)));
 
   const jira = await jiraToday(Object.keys(visits));
   const byKey = {};
@@ -272,9 +269,7 @@ async function todayTickets() {
       pmMinutes: pm[t.key] || 0,
       running: running.has(t.key),
     }))
-    .sort((a, b) =>
-      ((a.pmMinutes > 0 || a.running) - (b.pmMinutes > 0 || b.running)) ||
-      ((b.lastSeen || 0) - (a.lastSeen || 0)) || a.key.localeCompare(b.key));
+    .sort((a, b) => (b.running - a.running) || ((b.lastSeen || 0) - (a.lastSeen || 0)) || a.key.localeCompare(b.key));
 
   return {
     tickets,
@@ -306,33 +301,113 @@ async function scheduleEod() {
   browser.alarms.create('eod', { when: next.getTime() });
 }
 
+// ── Fill in blank PM timers ────────────────────────────────────
+// For PM entries with time today but no note (timers started straight in PM), write a
+// note from the Jira tickets touched today for the same client:
+//   - client of each ticket: PM.clientForIssue (no AI); only tickets with no PM time yet
+//   - client with several timers: the AI checks which timer each ticket fits
+//   - several blank entries on one timer: each ticket goes to the entry whose time
+//     today started closest to when the ticket was last opened
+//   - note: "<description> (KEY)" or, for several tickets, "<description> (KEY-1, KEY-2)"
+// Existing notes are never changed.
+async function fillBlankEntries() {
+  const status = await getStatus({ force: true });
+  const blanks = status.emptyNotesToday || [];
+  if (!blanks.length) return { filled: [], left: [] };
+
+  const [projects, today] = await Promise.all([PM.getProjects(), todayTickets()]);
+  const byId = Object.fromEntries(projects.map(p => [p.id, p]));
+  const open = today.tickets.filter(t => !t.pmMinutes && !t.running && t.summary);
+
+  const clientOf = new Map();
+  for (const t of open) {
+    const { client } = await PM.clientForIssue(t, status, projects).catch(() => ({}));
+    if (client) clientOf.set(t.key, client);
+  }
+
+  const pickCache = new Map(); // ticket key → best-fit project id (null = unknown)
+  async function fitsTimer(ticket, siblings, projectId) {
+    if (!pickCache.has(ticket.key)) pickCache.set(ticket.key, await AI.pickProject(ticket, siblings).catch(() => null));
+    const pick = pickCache.get(ticket.key);
+    return !pick || pick === projectId; // if the AI can't say, keep it with the client
+  }
+
+  const used = new Set();
+  const plan = new Map(); // entry id → tickets
+  const byProject = {};
+  blanks.forEach(b => (byProject[b.projectId] = byProject[b.projectId] || []).push(b));
+
+  for (const [projectId, entries] of Object.entries(byProject)) {
+    const project = byId[projectId];
+    if (!project) continue;
+    const siblings = projects.filter(p => p.client === project.client);
+    let candidates = open.filter(t => clientOf.get(t.key) === project.client && !used.has(t.key));
+    if (siblings.length > 1) {
+      const fits = [];
+      for (const t of candidates) if (await fitsTimer(t, siblings, projectId)) fits.push(t);
+      candidates = fits;
+    }
+    for (const t of candidates) {
+      const target = entries.length === 1 ? entries[0] : entries.reduce((best, e) => {
+        if (!t.lastSeen) return (plan.get(e.id)?.length || 0) < (plan.get(best.id)?.length || 0) ? e : best;
+        return Math.abs((e.firstStart || 0) - t.lastSeen) < Math.abs((best.firstStart || 0) - t.lastSeen) ? e : best;
+      });
+      plan.set(target.id, [...(plan.get(target.id) || []), t]);
+      used.add(t.key);
+    }
+  }
+
+  const notes = {};
+  const filled = [];
+  for (const b of blanks) {
+    const tickets = (plan.get(b.id) || []).sort((x, y) => (x.lastSeen || 0) - (y.lastSeen || 0)); // order worked
+    if (!tickets.length) continue;
+    const keys = tickets.map(t => t.key);
+    let note;
+    try {
+      note = await AI.generateCombinedEntry(tickets);
+    } catch {
+      note = tickets.length === 1 ? AI.fallbackEntry(tickets[0]) : `${tickets.map(t => t.summary).join('; ')} (${keys.join(', ')})`;
+    }
+    notes[b.id] = note;
+    filled.push({ id: b.id, projectName: b.projectName, client: b.client, note, keys });
+  }
+  if (filled.length) recordStatus(await PM.setNotes(notes));
+  const left = blanks.filter(b => !notes[b.id]).map(b => ({ id: b.id, projectName: b.projectName, client: b.client, minutes: b.minutes }));
+  return { filled, left };
+}
+
 async function endOfDayCheck({ force = false } = {}) {
   const nowD = new Date();
   if (!force) {
     if (nowD.getDay() === 0 || nowD.getDay() === 6) return; // weekdays only
-    // Alarms fire late after sleep; don't nag the next morning about "today".
+    // Alarms fire late after sleep; don't act the next morning on "today".
     const { eodTime = EOD_DEFAULT } = await browser.storage.local.get('eodTime');
     const [h, m] = String(eodTime).split(':').map(Number);
     if (nowD.getHours() * 60 + nowD.getMinutes() < (h || 16) * 60 + (m || 0)) return;
   }
-  const [{ dailyGoalHours }, today] = await Promise.all([
-    browser.storage.local.get('dailyGoalHours'),
-    todayTickets(),
-  ]);
+  let fill = { filled: [], left: [] };
+  let fillError = null;
+  try { fill = await fillBlankEntries(); } catch (e) { fillError = e.message || String(e); }
+
+  const { dailyGoalHours } = await browser.storage.local.get('dailyGoalHours');
   const goal = Number(dailyGoalHours) || 7;
-  const gaps = today.tickets.filter(t => !t.pmMinutes && !t.running);
-  const hours = today.todayBillableHours;
+  const hours = statusCache?.status?.todayBillableHours ?? null;
   const under = hours != null && hours < goal;
-  if (!under && !gaps.length && !force) return;
+  if (!force && !fill.filled.length && !fill.left.length && !under && !fillError) return;
+
   const parts = [];
-  if (hours != null) parts.push(`Today: ${hours.toFixed(1)} / ${goal} h in PM.`);
-  if (gaps.length) {
-    parts.push(`${gaps.length} Jira ticket${gaps.length === 1 ? '' : 's'} without PM time: ` +
-      gaps.slice(0, 4).map(t => t.key).join(', ') + (gaps.length > 4 ? '…' : '') + '.');
-    parts.push('Open Jira Time Helper to log them.');
-  } else if (!under) {
-    parts.push('Every ticket you touched today has PM time.');
+  if (fill.filled.length) {
+    parts.push(`Filled ${fill.filled.length} blank PM timer${fill.filled.length === 1 ? '' : 's'}: ` +
+      fill.filled.map(f => f.keys.join(', ')).join('; ') + '.');
   }
+  if (fill.left.length) {
+    parts.push(`${fill.left.length} blank timer${fill.left.length === 1 ? '' : 's'} had no matching Jira ticket: ` +
+      fill.left.map(l => l.projectName).join(', ') + '.');
+  }
+  if (fillError) parts.push(`Couldn't fill blank timers: ${fillError}`);
+  if (hours != null) parts.push(`Today: ${hours.toFixed(1)} / ${goal} h in PM.`);
+  if (!parts.length) parts.push('Nothing to fill in.');
   await browser.notifications.create('eod', {
     type: 'basic',
     iconUrl: browser.runtime.getURL('icons/icon96.png'),
@@ -366,6 +441,7 @@ browser.runtime.onMessage.addListener((msg) => {
     TODAY_TICKETS:  () => todayTickets(),
     TODAY_DISMISS:  () => dismissTicket(msg.key),
     EOD_TEST:       () => endOfDayCheck({ force: true }).then(() => ({})),
+    FILL_BLANKS:    () => fillBlankEntries(),
   };
   const handler = handlers[msg?.type];
   if (!handler) return; // not ours (e.g. SCRAPE_JIRA goes to content scripts)

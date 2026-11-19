@@ -266,6 +266,34 @@ Ticket description: ${withoutTimerLines(issue.description) || 'N/A'}`;
     return { text, cached: false, modelId: res.modelId };
   }
 
+  // One entry covering several tickets: "<one short description> (KEY-1, KEY-2)".
+  // The model writes only the description; code appends the keys.
+  async function generateCombinedEntry(issues) {
+    if (issues.length === 1) return (await generateEntry(issues[0])).text;
+    const keys = issues.map(i => i.key);
+    const list = issues.map(i => `- ${i.key}: ${i.summary || 'N/A'}`).join('\n');
+    const prompt = `You are a time-tracking assistant. One time entry covers work on several Jira tickets.
+
+Write the DESCRIPTION part of the entry. The final entry will be exactly:
+<description> (${keys.join(', ')})
+The ticket keys are added automatically — do not include them.
+
+Rules for the description:
+- One short, plain-English noun phrase covering all the tickets at a high level — do NOT start with a verb
+- Prefer the tickets' title wording; no labels like "PROPOSING:", no quotes, no trailing period
+- One line, ideally under 12 words
+
+Tickets:
+${list}`;
+    const res = await complete(prompt, { maxTokens: 2048, schema: ENTRY_SCHEMA });
+    let d = descriptionFrom(res);
+    d = cleanEntry(d, null) || '';
+    // Remove any keys the model added anywhere at the end.
+    d = d.replace(/\s*\((?:[A-Z][A-Z0-9_]+-\d+(?:\s*,\s*)?)+\)\s*$/i, '').trim();
+    if (!d) throw new ApiError('The AI returned no description.');
+    return `${d} (${keys.join(', ')})`;
+  }
+
   // ── Best-fit PM project ─────────────────────────────────────
   // candidates: [{ id, name, client, parents: [..] }]. Returns a candidate id or null.
   const PICK_SCHEMA = {
@@ -378,7 +406,7 @@ Latest message: ${(email.body || '(not shared)').slice(0, 1500)}`;
   globalThis.AI = {
     DEFAULT_MODELS, PROVIDER_NAMES, ApiError,
     getConfig, complete, friendlyError,
-    generateEntry, cleanEntry, fallbackEntry, pickProject, timerHint,
+    generateEntry, generateCombinedEntry, cleanEntry, fallbackEntry, pickProject, timerHint,
     pickEmailTimer, generateEmailNote, emailNoteFromTopics, EMAIL_NOTE_BASE,
     fetchWithTimeout,
   };

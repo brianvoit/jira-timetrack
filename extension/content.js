@@ -140,7 +140,7 @@
       return issue;
     },
     startMessage: (issue, opts) => ({ type: 'PM_START', issue, ...opts }),
-    runningFor: (status, key) => status.running.find(r => (r.note || '').toUpperCase().includes(`(${key})`)),
+    runningFor: (status, key) => status.running.find(r => JiraUrl.keysInNote(r.note).includes(key)),
     remember: issue => ({ type: 'jira', projectKey: issue?.projectKey }),
   });
 

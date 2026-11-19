@@ -108,9 +108,12 @@ Future updates are delivered automatically — Firefox polls `updates.json` and 
 4. The toolbar badge shows the running timer's elapsed time, or **!** if a timer has been running too long.
 5. The popup's **Today** panel shows billable hours against your daily goal (default 7 h, set in **···**)
    and flags runaway timers and entries without notes.
-6. **Jira tickets today** (in the popup) lists every ticket you viewed or updated today — from Jira's search
-   plus the tickets you opened — with its PM time today. Tickets with **no PM time** are highlighted at the top:
-   **▶** opens the ticket and starts its timer, **⧉** copies its note, **×** hides it for today.
+6. **Blank PM timers get filled in.** Start timers straight in PM without a note if you like: at the end of
+   the day (default 4:30 pm, set in **···**) the extension writes a note on each of today's blank entries
+   from the Jira tickets you touched for that client (and timer) that aren't logged yet —
+   `Description (MARY-53)`, or `Description (MARY-60, MARY-61)` when one entry covers several. Existing notes are
+   never changed; blank entries with no matching ticket are left and listed. **Fill N blank timers** in the
+   popup's Today card does it on demand. **Jira tickets today** lists what you touched with its PM time.
 7. **Gmail:** open a client email and click **▶ Start timer** (bottom-right). The client is matched from the
    email **addresses only** (domain → PM client/site names, choices remembered); the AI picks among that
    client's timers from the subject and latest message. The note is always
@@ -118,8 +121,8 @@ Future updates are delivered automatically — Firefox polls `updates.json` and 
    back to the thread resumes it. Sending a reply pauses the thread's timer. Addresses are never sent to
    the AI; quoted history is dropped and emails/phones are redacted (turn off "Use the email's text" in
    **···** to send the subject only).
-8. **End-of-day reminder** (weekdays, default 4:30 pm, set in **···**): a notification if you're under your
-   goal or have Jira tickets without PM time.
+8. **End of day** (weekdays): fills blank timers, then one notification with what was filled, anything left
+   blank, and today's hours vs your goal.
 
 ---
 
