@@ -49,7 +49,44 @@
     return res;
   }
 
+  // After we change something in PM, reload any open PM tabs. Every PM button resubmits the
+  // whole page (all notes), so a tab still showing old values would undo our change the next
+  // time it's used. The reload waits until our requests have gone quiet, so it never lands
+  // mid-sequence (we may be sending requests through that tab). PM's own "leave without
+  // saving?" prompt still protects anything being edited there.
+  const RELOAD_QUIET_MS = 1500;
+  let reloadPending = false, reloadTimer = null, inFlight = 0;
+
+  function armReload() {
+    clearTimeout(reloadTimer);
+    if (!reloadPending || inFlight) return;
+    reloadTimer = setTimeout(async () => {
+      if (inFlight) return;
+      reloadPending = false;
+      try {
+        const tabs = await browser.tabs.query({ url: `${ORIGIN}/*` });
+        tabs.forEach(t => browser.tabs.reload(t.id).catch(() => {}));
+      } catch { /* no PM tabs, or no access */ }
+    }, RELOAD_QUIET_MS);
+  }
+
+  const isWrite = (path, init) =>
+    String(init?.method || 'GET').toUpperCase() === 'POST' || /[?&]new_project=/.test(path);
+
   async function request(path, init) {
+    inFlight++;
+    clearTimeout(reloadTimer);
+    try {
+      const res = await send(path, init);
+      if (isWrite(path, init)) reloadPending = true;
+      return res;
+    } finally {
+      inFlight--;
+      armReload();
+    }
+  }
+
+  async function send(path, init) {
     const url = new URL(path, BASE).href;
     if (!viaTab) {
       const res = await directFetch(url, init);
