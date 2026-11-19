@@ -83,7 +83,7 @@ function makeSaveHandler(inputEl, storageKey, btn) {
       settingsOpen = false;
       panelSettings.classList.remove('active');
       panelMain.classList.add('active');
-      btnSettings.style.color = '';
+      btnSettings.classList.remove('on');
       scrape();
     }, 1000);
   });
@@ -115,7 +115,7 @@ btnSettings.addEventListener('click', () => {
   settingsOpen = !settingsOpen;
   panelSettings.classList.toggle('active', settingsOpen);
   panelMain.classList.toggle('active', !settingsOpen);
-  btnSettings.style.color = settingsOpen ? 'var(--key-text, #5b9cf6)' : '';
+  btnSettings.classList.toggle('on', settingsOpen);
 });
 
 // ── Init: restore saved settings ──────────────────────────────
@@ -408,7 +408,7 @@ async function loadTodayList() {
   list.className = 't-list';
   tickets.forEach(t => {
     const row = document.createElement('div');
-    row.className = 't-row' + (!t.pmMinutes && !t.running ? ' gap' : '');
+    row.className = 't-row' + (!t.pmMinutes && !t.running ? ' gap' : '') + (t.running ? ' running' : '');
 
     const main = document.createElement('div');
     main.className = 't-main';
@@ -482,8 +482,8 @@ aiResult.addEventListener('input', () => {
   btnCopyAI.disabled = !currentSummary;
 });
 
-btnCopyAI.addEventListener('click',  () => copyText(currentSummary, btnCopyAI,  'Copy Summary'));
-btnCopyRaw.addEventListener('click', () => copyText(buildRawText(), btnCopyRaw, 'Copy Raw'));
+btnCopyAI.addEventListener('click',  () => copyText(currentSummary, btnCopyAI,  'Copy summary'));
+btnCopyRaw.addEventListener('click', () => copyText(buildRawText(), btnCopyRaw, 'Copy raw'));
 btnRefresh.addEventListener('click', () => scrape({ regenerate: true }));
 
 // ── Version display + update check ────────────────────────────
