@@ -107,7 +107,7 @@ Future updates are delivered automatically — Firefox polls `updates.json` and 
    (the popup lets you edit the note first).
 4. The toolbar badge shows the running timer's elapsed time, or **!** if a timer has been running too long.
 5. The popup's **Today** panel shows billable hours against your daily goal (default 7 h, set in **···**)
-   and flags runaway timers, very long segments, and entries without notes.
+   and flags runaway timers and entries without notes.
 6. **Jira tickets today** (in the popup) lists every ticket you viewed or updated today — from Jira's search
    plus the tickets you opened — with its PM time today. Tickets with **no PM time** are highlighted at the top:
    **▶** opens the ticket and starts its timer, **⧉** copies its note, **×** hides it for today.

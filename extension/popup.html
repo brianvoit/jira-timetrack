@@ -106,7 +106,7 @@
       padding: 12px 14px;
       margin-bottom: var(--pm-gap);
     }
-    .card-title, .settings-label, .field label, .ai-label {
+    .card-title, .settings-label, .ai-label {
       display: flex; align-items: center; gap: 6px;
       font-size: var(--pm-fs-sm); font-weight: 600; color: var(--pm-text-2);
       margin-bottom: 6px;
@@ -196,17 +196,6 @@
     .update-status.visible { display: block; }
     .update-status.has-update { color: var(--pm-accent); }
     .update-status.error { color: var(--pm-danger); }
-
-    /* ── Ticket ── */
-    .field + .field { margin-top: 10px; }
-    .value {
-      padding: 7px 10px; border-radius: 8px; background: var(--pm-fill);
-      font-size: var(--pm-fs); line-height: 1.45; color: var(--pm-text);
-      white-space: pre-wrap; word-break: break-word; max-height: 104px; overflow-y: auto;
-    }
-    .value.key-value { font: 600 13px var(--pm-mono); color: var(--pm-accent); background: var(--pm-accent-soft); display: inline-block; padding: 3px 8px; }
-    .value.empty { color: var(--pm-text-3); font-style: italic; font-size: var(--pm-fs-sm); }
-    .value.key-value.empty { background: var(--pm-fill); }
 
     /* ── Time entry ── */
     .badge {
@@ -430,22 +419,7 @@
       <strong>No API key set.</strong> Click ··· above to add one.
     </div>
 
-    <div class="card">
-      <div class="field">
-        <label>Issue</label>
-        <div id="val-key" class="value key-value empty">—</div>
-      </div>
-      <div class="field">
-        <label>Task name</label>
-        <div id="val-summary" class="value empty">—</div>
-      </div>
-      <div class="field">
-        <label>Description</label>
-        <div id="val-desc" class="value empty">—</div>
-      </div>
-    </div>
-
-    <div class="card">
+    <div class="card" id="entry-card">
       <div class="ai-label">
         Time entry
         <span class="badge" id="model-badge">Gemini</span>

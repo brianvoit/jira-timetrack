@@ -256,16 +256,10 @@
       keys.forEach(k => { minutesByKey[k] = (minutesByKey[k] || 0) + mins; });
     });
 
-    const longSegments = timers.entries.flatMap(e =>
-      e.segments.filter(s => s.stop && s.minutes > 8 * 60).map(s => ({
-        id: e.id, projectName: e.projectName, client: e.client, note: e.note, start: s.start, stop: s.stop, minutes: s.minutes,
-      }))
-    );
     return {
       todayBillableHours: timers.report['total billable']?.[0] ?? null,
       running,
       emptyNotesToday,
-      longSegments,
       minutesByKey,
       entries: timers.entries.map(({ id, projectId, projectName, client, note, running: r }) =>
         ({ id, projectId, projectName, client, note, running: r })),

@@ -29,9 +29,7 @@ const loading       = $('loading');
 const fieldsEl      = $('fields');
 const emptyStateEl  = $('empty-state');
 const emptyMsgEl    = $('empty-msg');
-const valKey        = $('val-key');
-const valSum        = $('val-summary');
-const valDesc       = $('val-desc');
+const entryCard     = $('entry-card');
 const aiResult      = $('ai-result');
 const modelBadge    = $('model-badge');
 const btnStartPm    = $('btn-start-pm');
@@ -143,9 +141,13 @@ btnSettings.addEventListener('click', () => {
 })();
 
 // ── Helpers ────────────────────────────────────────────────────
-function setField(el, text) {
-  if (text) { el.textContent = text; el.classList.remove('empty'); }
-  else { el.textContent = 'Not found'; el.classList.add('empty'); }
+// Hide the Time entry card when the running PM timer is already this ticket
+// (the Today card shows it). Called whenever the ticket or PM status arrives.
+let pmRunning = [];
+function updateEntryCard() {
+  const key = (currentData.key || '').toUpperCase();
+  const timingThis = !!key && pmRunning.some(r => (r.note || '').toUpperCase().includes(`(${key})`));
+  entryCard.style.display = timingThis ? 'none' : '';
 }
 
 let statusTimer = null;
@@ -232,9 +234,7 @@ async function scrape({ regenerate = false } = {}) {
   }
 
   currentData = data || {};
-  setField(valKey,  currentData.key);
-  setField(valSum,  currentData.summary);
-  setField(valDesc, currentData.description);
+  updateEntryCard();
 
   loading.style.display = 'none';
   fieldsEl.style.display = 'block';
@@ -276,7 +276,6 @@ function showError(msg) {
   loading.style.display = 'none';
   fieldsEl.style.display = 'block';
   setStatus(msg, 'error');
-  setField(valKey, null); setField(valSum, null); setField(valDesc, null);
   setAiState('error', msg);
 }
 
@@ -333,6 +332,8 @@ async function loadPmStatus() {
   }
   const s = res.status;
   const today = s.todayBillableHours;
+  pmRunning = s.running || [];
+  updateEntryCard();
 
   const head = pmLine('', 'pm-head');
   const label = document.createElement('span'); label.textContent = 'Today';
@@ -353,9 +354,6 @@ async function loadPmStatus() {
   }
   s.running.filter(r => r.runaway).forEach(r => pmLine(
     `Running since ${new Date(r.startedAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })} — is that right?`,
-    'pm-line warn'));
-  s.longSegments.forEach(l => pmLine(
-    `${Math.round(l.minutes / 60)} h segment on ${l.note || l.projectName} (${l.start.slice(5, 16)} → ${l.stop.slice(5, 16)}) — check before invoicing.`,
     'pm-line warn'));
   if (s.emptyNotesToday.length) {
     pmLine(`${s.emptyNotesToday.length} entr${s.emptyNotesToday.length === 1 ? 'y' : 'ies'} from today without a note: ` +
