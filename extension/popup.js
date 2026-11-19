@@ -19,6 +19,9 @@ const btnSaveGemini = $('btn-save-gemini');
 const btnSaveClaude = $('btn-save-claude');
 const goalInput     = $('goal-input');
 const showButtonInput = $('show-button-input');
+const eodEnabledInput = $('eod-enabled-input');
+const eodTimeInput    = $('eod-time-input');
+const btnEodTest      = $('btn-eod-test');
 const noKeyWarn     = $('no-key-warn');
 const loading       = $('loading');
 const fieldsEl      = $('fields');
@@ -100,6 +103,9 @@ saveOnChange(geminiModelInput, 'geminiModel');
 saveOnChange(claudeModelInput, 'claudeModel');
 saveOnChange(goalInput, 'dailyGoalHours', el => Number(el.value) || 7);
 showButtonInput.addEventListener('change', () => browser.storage.local.set({ showJiraButton: showButtonInput.checked }));
+saveOnChange(eodTimeInput, 'eodTime', el => el.value || '16:30');
+eodEnabledInput.addEventListener('change', () => browser.storage.local.set({ eodEnabled: eodEnabledInput.checked }));
+btnEodTest.addEventListener('click', () => browser.runtime.sendMessage({ type: 'EOD_TEST' }));
 
 btnSettings.addEventListener('click', () => {
   settingsOpen = !settingsOpen;
@@ -111,8 +117,11 @@ btnSettings.addEventListener('click', () => {
 // ── Init: restore saved settings ──────────────────────────────
 (async () => {
   const s = await browser.storage.local.get(
-    ['geminiApiKey', 'claudeApiKey', 'selectedModel', 'geminiModel', 'claudeModel', 'dailyGoalHours', 'showJiraButton']
+    ['geminiApiKey', 'claudeApiKey', 'selectedModel', 'geminiModel', 'claudeModel', 'dailyGoalHours', 'showJiraButton',
+     'eodEnabled', 'eodTime']
   );
+  eodEnabledInput.checked = s.eodEnabled !== false;
+  eodTimeInput.value = s.eodTime || '16:30';
   if (s.geminiApiKey) geminiInput.value = s.geminiApiKey;
   if (s.claudeApiKey) claudeInput.value = s.claudeApiKey;
   if (s.geminiModel)  geminiModelInput.value = s.geminiModel;
@@ -344,6 +353,104 @@ async function loadPmStatus() {
   }
 }
 
+// ── Today's Jira tickets vs PM time (end-of-day list) ─────────
+const todayEl = $('today-list');
+
+function fmtMinutes(m) {
+  if (!m) return '';
+  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
+}
+
+function iconButton(label, title, onClick) {
+  const b = document.createElement('button');
+  b.className = 't-btn';
+  b.textContent = label;
+  b.title = title;
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+async function loadTodayList() {
+  todayEl.textContent = '';
+  const res = await browser.runtime.sendMessage({ type: 'TODAY_TICKETS' }).catch(() => null);
+  if (!res || res.error) return;
+  const { tickets } = res;
+  if (!tickets.length && res.jiraAvailable) return;
+
+  const gaps = tickets.filter(t => !t.pmMinutes && !t.running);
+  const head = document.createElement('div');
+  head.className = 't-head';
+  const h = document.createElement('span'); h.textContent = 'Jira tickets today';
+  const c = document.createElement('span');
+  c.className = gaps.length ? 't-count warn' : 't-count';
+  c.textContent = tickets.length ? (gaps.length ? `${gaps.length} without PM time` : 'all have PM time') : '';
+  head.append(h, c);
+  todayEl.appendChild(head);
+
+  if (!res.jiraAvailable) {
+    const n = document.createElement('div');
+    n.className = 'pm-line muted';
+    n.textContent = 'Keep a Jira tab open to include tickets you viewed or updated anywhere.';
+    todayEl.appendChild(n);
+  }
+
+  const list = document.createElement('div');
+  list.className = 't-list';
+  tickets.forEach(t => {
+    const row = document.createElement('div');
+    row.className = 't-row' + (!t.pmMinutes && !t.running ? ' gap' : '');
+
+    const main = document.createElement('div');
+    main.className = 't-main';
+    const key = document.createElement('a');
+    key.className = 't-key';
+    key.textContent = t.key;
+    if (t.base) key.addEventListener('click', () => browser.tabs.create({ url: `${t.base}/browse/${t.key}` }).then(() => window.close()));
+    const sum = document.createElement('span');
+    sum.className = 't-sum';
+    sum.textContent = t.summary || '';
+    sum.title = t.summary || '';
+    main.append(key, sum);
+
+    const side = document.createElement('div');
+    side.className = 't-side';
+    const time = document.createElement('span');
+    time.className = 't-time';
+    time.textContent = t.running ? `● ${fmtMinutes(t.pmMinutes) || 'now'}` : (t.pmMinutes ? fmtMinutes(t.pmMinutes) : 'no PM time');
+    side.appendChild(time);
+
+    if (!t.running && t.base) {
+      side.appendChild(iconButton('▶', 'Open the ticket and start its PM timer', () =>
+        browser.tabs.create({ url: `${t.base}/browse/${t.key}#jth-start` }).then(() => window.close())));
+    }
+    const copyBtn = iconButton('⧉', t.summary ? 'Copy the time entry note' : 'Open the ticket in Jira to load its title', async () => {
+      copyBtn.disabled = true;
+      copyBtn.textContent = '…';
+      try {
+        const r = await AI.generateEntry(t);
+        await navigator.clipboard.writeText(r.text);
+        copyBtn.textContent = '✓';
+        setStatus(`Copied: ${r.text}`, 'success');
+      } catch (e) {
+        copyBtn.textContent = '⧉';
+        setStatus(AI.friendlyError(e), 'error');
+      } finally {
+        setTimeout(() => { copyBtn.textContent = '⧉'; copyBtn.disabled = !t.summary; }, 1500);
+      }
+    });
+    copyBtn.disabled = !t.summary;
+    side.appendChild(copyBtn);
+    side.appendChild(iconButton('×', 'Hide from today’s list', async () => {
+      await browser.runtime.sendMessage({ type: 'TODAY_DISMISS', key: t.key });
+      row.remove();
+    }));
+
+    row.append(main, side);
+    list.appendChild(row);
+  });
+  todayEl.appendChild(list);
+}
+
 // ── Copy ───────────────────────────────────────────────────────
 async function copyText(text, btn, label) {
   if (!text) { setStatus('Nothing to copy.', 'error'); return; }
@@ -430,3 +537,4 @@ btnCheckUpdate.addEventListener('click', async () => {
 
 scrape();
 loadPmStatus();
+loadTodayList();

@@ -300,6 +300,38 @@
       color: var(--text); margin-top: 6px; cursor: pointer;
     }
     .goal-input { flex: none; width: 64px; padding: 5px 8px; }
+    .time-input { flex: none; width: 96px; padding: 4px 6px; }
+    .setting-row.inline { margin-top: 0; }
+
+    /* ── End-of-day list ── */
+    .today-list { margin-top: 10px; font-size: 12px; }
+    .today-list:empty { display: none; }
+    .t-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+    .t-head span:first-child {
+      font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--text-muted);
+    }
+    .t-count { font-size: 11px; color: var(--text-dim); }
+    .t-count.warn { color: var(--warn-text); font-weight: 600; }
+    .t-list { max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; }
+    .t-row {
+      display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+      border-bottom: 1px solid var(--section-border);
+    }
+    .t-row:last-child { border-bottom: 0; }
+    .t-row.gap { background: var(--warn-bg); }
+    .t-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .t-key { font-family: monospace; font-weight: 700; color: var(--key-text); cursor: pointer; }
+    .t-key:hover { text-decoration: underline; }
+    .t-sum { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .t-side { display: flex; align-items: center; gap: 4px; flex: none; }
+    .t-time { font-size: 11px; color: var(--text-muted); min-width: 52px; text-align: right; margin-right: 2px; }
+    .t-row.gap .t-time { color: var(--warn-text); font-weight: 600; }
+    .t-btn {
+      width: 24px; height: 24px; border: 1px solid var(--border); border-radius: 5px;
+      background: var(--action); color: var(--action-text); cursor: pointer; font-size: 12px; line-height: 1;
+    }
+    .t-btn:hover:not(:disabled) { background: var(--action-hover); color: var(--action-text-hover); }
+    .t-btn:disabled { opacity: .35; cursor: not-allowed; }
 
     /* ── Update checker ── */
     .update-section {
@@ -417,6 +449,11 @@
     <label class="setting-row">
       <input type="checkbox" id="show-button-input" /> Show the Start timer button on Jira pages
     </label>
+    <div class="setting-row">
+      <label class="setting-row inline"><input type="checkbox" id="eod-enabled-input" /> End-of-day reminder at</label>
+      <input class="key-input time-input" id="eod-time-input" type="time" step="900" />
+      <button class="check-update-btn" id="btn-eod-test" title="Show the reminder now">Test</button>
+    </div>
   </div>
 
   <!-- Version / update check -->
@@ -478,6 +515,7 @@
   </div>
 
   <div class="pm-status" id="pm-status"></div>
+  <div class="today-list" id="today-list"></div>
 </div>
 
 <script src="lib/jira.js"></script>

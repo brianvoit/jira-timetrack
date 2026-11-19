@@ -226,6 +226,22 @@
     const emptyNotesToday = timers.entries.filter(e =>
       !e.note && e.segments.some(s => s.start.startsWith(localToday) || (s.stop || '').startsWith(localToday))
     ).map(e => ({ id: e.id, projectName: e.projectName, client: e.client }));
+    // Minutes logged today per Jira key, from notes ending in "(KEY-123)".
+    const minutesByKey = {};
+    const midMs = midnight.getTime();
+    timers.entries.forEach(e => {
+      const keys = [...e.note.matchAll(/\(([A-Z][A-Z0-9_]+-\d+)\)/gi)].map(m => m[1].toUpperCase());
+      if (!keys.length) return;
+      let ms = 0;
+      e.segments.forEach(s => {
+        const a = parseLocalDate(s.start).getTime();
+        const b = s.stop ? parseLocalDate(s.stop).getTime() : now; // open segment = running
+        ms += Math.max(0, Math.min(b, now) - Math.max(a, midMs));
+      });
+      const mins = Math.round(ms / 60000);
+      keys.forEach(k => { minutesByKey[k] = (minutesByKey[k] || 0) + mins; });
+    });
+
     const longSegments = timers.entries.flatMap(e =>
       e.segments.filter(s => s.stop && s.minutes > 8 * 60).map(s => ({
         id: e.id, projectName: e.projectName, client: e.client, note: e.note, start: s.start, stop: s.stop, minutes: s.minutes,
@@ -236,6 +252,7 @@
       running,
       emptyNotesToday,
       longSegments,
+      minutesByKey,
       entries: timers.entries.map(({ id, projectId, projectName, client, note, running: r }) =>
         ({ id, projectId, projectName, client, note, running: r })),
       fetchedAt: now,

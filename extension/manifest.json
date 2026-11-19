@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Jira Time Helper",
-  "version": "3.1",
+  "version": "3.2",
   "description": "Starts the right pm.plaudit.com timer from a Jira ticket, with an AI-written time entry note.",
   "icons": {
     "48": "icons/icon48.png",
@@ -26,6 +26,7 @@
   "permissions": [
     "activeTab",
     "alarms",
+    "notifications",
     "clipboardWrite",
     "storage",
     "tabs",

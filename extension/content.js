@@ -80,9 +80,53 @@
     }
   }
 
-  // ── Messages from the popup ───────────────────────────────────
+  // ── Today's issues (for the end-of-day list) ─────────────────
+  async function searchJira(jql, max = 50) {
+    const fields = 'summary,description,project,status';
+    const url = `${jiraBase()}/rest/api/2/search?jql=${encodeURIComponent(jql)}&fields=${fields}&maxResults=${max}`;
+    const resp = await pageFetch(url, { credentials: 'same-origin', headers: { Accept: 'application/json' } });
+    if (!resp.ok) throw new Error(`Jira search ${resp.status}`);
+    const json = await resp.json();
+    return (json.issues || []).map(i => ({
+      key: i.key,
+      projectKey: i.fields?.project?.key || JiraUrl.projectKeyOf(i.key),
+      projectName: i.fields?.project?.name || null,
+      summary: i.fields?.summary || null,
+      description: trimDescription(typeof i.fields?.description === 'string' ? i.fields.description : null),
+      status: i.fields?.status?.name || null,
+      base: jiraBase(),
+    }));
+  }
+
+  // Issues viewed today, or assigned to me and updated today, plus any keys the
+  // extension saw opened today (so titles show for those too).
+  async function jiraToday(keys = []) {
+    const queries = [
+      'lastViewed >= startOfDay() OR (assignee = currentUser() AND updated >= startOfDay()) ORDER BY lastViewed DESC',
+      'assignee = currentUser() AND updated >= startOfDay() ORDER BY updated DESC', // if lastViewed isn't searchable
+    ];
+    let issues = [];
+    for (const q of queries) {
+      try { issues = (await searchJira(q)).map(i => ({ ...i, source: 'jira' })); break; } catch { /* next */ }
+    }
+    const missing = keys.filter(k => !issues.some(i => i.key === k));
+    if (missing.length) {
+      try {
+        issues.push(...(await searchJira(`issuekey in (${missing.join(',')})`, missing.length)).map(i => ({ ...i, source: 'visited' })));
+      } catch {
+        // One deleted/moved key fails the whole query — fetch individually instead.
+        for (const k of missing) {
+          try { issues.push({ ...(await issueFromApi(k)), base: jiraBase(), source: 'visited' }); } catch { /* skip */ }
+        }
+      }
+    }
+    return { ok: true, issues, base: jiraBase() };
+  }
+
+  // ── Messages from the popup / background ──────────────────────
   browser.runtime.onMessage.addListener((msg) => {
     if (msg.type === 'SCRAPE_JIRA') return readIssue();
+    if (msg.type === 'JIRA_TODAY') return jiraToday(msg.keys);
     if (msg.type === 'WIDGET_START') { widget.start({ note: msg.note }); return Promise.resolve({ ok: true }); }
   });
 
@@ -266,6 +310,7 @@
 
     async function start({ projectId, note } = {}) {
       if (busy) return;
+      currentKey = JiraUrl.issueKeyFromUrl(location.href); // so sync() doesn't reset the panel mid-start
       if (!host) { build(); refreshStatus(); }
       host.style.display = '';
       setMinimized(false, false);
@@ -378,6 +423,12 @@
 
     return { sync, start, refreshStatus };
   })();
+
+  // Opened from the popup's end-of-day list with "▶": start the timer right away.
+  if (location.hash === '#jth-start') {
+    history.replaceState(null, '', location.pathname + location.search);
+    widget.start();
+  }
 
   browser.storage.local.get('showJiraButton').then(({ showJiraButton }) => {
     if (showJiraButton === false) return;
