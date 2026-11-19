@@ -1,15 +1,17 @@
 {
   "manifest_version": 2,
   "name": "Jira Time Helper",
-  "version": "3.2",
-  "description": "Starts the right pm.plaudit.com timer from a Jira ticket, with an AI-written time entry note.",
+  "version": "3.3",
+  "description": "Starts the right pm.plaudit.com timer from a Jira ticket or a client email in Gmail, with an AI-written note.",
   "icons": {
     "48": "icons/icon48.png",
     "96": "icons/icon96.png"
   },
   "browser_action": {
     "default_popup": "popup.html",
-    "default_icon": { "48": "icons/icon48.png" },
+    "default_icon": {
+      "48": "icons/icon48.png"
+    },
     "default_title": "Jira Time Helper"
   },
   "browser_specific_settings": {
@@ -20,7 +22,12 @@
     }
   },
   "background": {
-    "scripts": ["lib/jira.js", "lib/ai.js", "lib/pm.js", "background.js"],
+    "scripts": [
+      "lib/jira.js",
+      "lib/ai.js",
+      "lib/pm.js",
+      "background.js"
+    ],
     "persistent": false
   },
   "permissions": [
@@ -46,7 +53,21 @@
         "*://*/jira/software/*/boards/*",
         "*://*/projects/*/issues/*"
       ],
-      "js": ["lib/jira.js", "content.js"],
+      "js": [
+        "lib/jira.js",
+        "lib/widget.js",
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://mail.google.com/*"
+      ],
+      "js": [
+        "lib/widget.js",
+        "gmail.js"
+      ],
       "run_at": "document_idle"
     }
   ]

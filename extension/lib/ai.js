@@ -277,25 +277,20 @@ Ticket description: ${withoutTimerLines(issue.description) || 'N/A'}`;
     additionalProperties: false,
   };
 
-  async function pickProject(issue, candidates) {
+  // Asks the AI to pick one of `candidates`; `about` describes the work. Returns an id or null.
+  async function chooseFromList(about, candidates) {
     if (!candidates.length) return null;
     if (candidates.length === 1) return candidates[0].id;
     const list = candidates.map((p, i) =>
       `${i + 1}. ${p.name} — ${[...p.parents].reverse().join(' / ')} — client: ${p.client}`
     ).join('\n');
-    const hint = timerHint(issue);
-    const prompt = `A developer at a digital agency is about to start a timer for this Jira ticket. Pick the project timer the work should be logged against.
-
-Jira ticket: ${issue.key}
-Jira project: ${issue.projectName || issue.projectKey || 'unknown'}
-Title: ${issue.summary || 'N/A'}
-${hint ? `The ticket says which timer to use: "TIMER: ${hint}" — follow it.\n` : ''}Description: ${withoutTimerLines(issue.description).slice(0, 1200) || 'N/A'}
+    const prompt = `${about}
 
 Project timers:
 ${list}
 
 Rules:
-- Match the client first, then the service (e.g. Google Ads vs Microsoft Ads vs SEO vs website/CMS support) that best fits the ticket's work.
+- Match the client first, then the service (e.g. Google Ads vs Microsoft Ads vs SEO vs website/CMS support) that best fits the work.
 - Reply with ONLY the number of the best project. If none plausibly fits, reply 0.`;
     const res = await complete(prompt, { maxTokens: 1024, schema: PICK_SCHEMA });
     let n = 0;
@@ -304,10 +299,87 @@ Rules:
     return n >= 1 && n <= candidates.length ? candidates[n - 1].id : null;
   }
 
+  function pickProject(issue, candidates) {
+    const hint = timerHint(issue);
+    return chooseFromList(`A developer at a digital agency is about to start a timer for this Jira ticket. Pick the project timer the work should be logged against.
+
+Jira ticket: ${issue.key}
+Jira project: ${issue.projectName || issue.projectKey || 'unknown'}
+Title: ${issue.summary || 'N/A'}
+${hint ? `The ticket says which timer to use: "TIMER: ${hint}" — follow it.\n` : ''}Description: ${withoutTimerLines(issue.description).slice(0, 1200) || 'N/A'}`, candidates);
+  }
+
+  // ── Email work (Gmail) ──────────────────────────────────────
+  // The client is matched from email addresses only (lib/pm.js), never by the AI,
+  // and addresses are never sent to the AI. The AI sees only the subject and the
+  // latest message (quoted history removed, contact details redacted, capped).
+  function pickEmailTimer(email, candidates) {
+    return chooseFromList(`Someone at a digital agency is about to log time for reading and answering a client email. The client is already known; pick which of the client's project timers this email's work belongs to.
+
+Subject: ${email.subject || 'N/A'}
+Latest message: ${(email.body || '(not shared)').slice(0, 1500)}`, candidates);
+  }
+
+  // Note format (exact): "Correspondence with client about X, Y, and Z" — very brief and
+  // high level. The model returns only 1–3 broad topics; code builds the sentence.
+  const EMAIL_NOTE_BASE = 'Correspondence with client';
+  const TOPICS_SCHEMA = {
+    type: 'object',
+    properties: {
+      topics: { type: 'array', items: { type: 'string' }, description: '1-3 broad, high-level topics, 1-4 words each.' },
+    },
+    required: ['topics'],
+    additionalProperties: false,
+  };
+
+  function emailNoteFromTopics(topics) {
+    const t = (topics || [])
+      .map(x => String(x).replace(/^[\s"'`*-]+|[\s"'`*.;:,]+$/g, '').replace(/\s+/g, ' '))
+      .filter(x => x && x.split(' ').length <= 5)
+      .map(x => (/^[A-Z][a-z]/.test(x) ? x[0].toLowerCase() + x.slice(1) : x)) // keep acronyms like SEO
+      .slice(0, 3);
+    if (!t.length) return EMAIL_NOTE_BASE;
+    const list = t.length === 1 ? t[0] : t.length === 2 ? `${t[0]} and ${t[1]}` : `${t[0]}, ${t[1]}, and ${t[2]}`;
+    return `${EMAIL_NOTE_BASE} about ${list}`;
+  }
+
+  function topicsFrom(res) {
+    const raw = res.text || '';
+    try {
+      const json = res.structured ? JSON.parse(raw) : JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0] || '{}');
+      if (Array.isArray(json.topics)) return json.topics;
+    } catch { /* fall through */ }
+    return raw.split(/\n|,/).map(s => s.replace(/^\s*(\d+[.)]|[-*•])\s*/, '')).filter(Boolean);
+  }
+
+  async function generateEmailNote(email, { regenerate = false } = {}) {
+    const cfg = await getConfig();
+    const ck = `email:${cfg.provider}:${cfg.modelId}:${email.threadId}:${hashText(`${email.subject}\n${email.body || ''}`)}`;
+    if (!regenerate) {
+      const cached = await getCached(ck).catch(() => null);
+      if (cached) return cached;
+    }
+    const prompt = `Summarize what this client email is about as 1-3 broad topics for a time entry. The entry will read:
+"${EMAIL_NOTE_BASE} about <topic>, <topic>, and <topic>"
+
+Rules:
+- 1 to 3 topics; fewer is better. Each topic is 1-4 words, lowercase, generic (e.g. "campaign performance", "budget", "website updates", "SEO strategy").
+- Keep it high level: no names, companies, numbers, dates, URLs, or specifics.
+- Return JSON: {"topics": ["...", "..."]}
+
+Subject: ${email.subject || 'N/A'}
+Latest message: ${(email.body || '(not shared)').slice(0, 1500)}`;
+    const res = await complete(prompt, { maxTokens: 1024, schema: TOPICS_SCHEMA });
+    const note = emailNoteFromTopics(topicsFrom(res));
+    putCached(ck, note).catch(() => {});
+    return note;
+  }
+
   globalThis.AI = {
     DEFAULT_MODELS, PROVIDER_NAMES, ApiError,
     getConfig, complete, friendlyError,
     generateEntry, cleanEntry, fallbackEntry, pickProject, timerHint,
+    pickEmailTimer, generateEmailNote, emailNoteFromTopics, EMAIL_NOTE_BASE,
     fetchWithTimeout,
   };
 })();

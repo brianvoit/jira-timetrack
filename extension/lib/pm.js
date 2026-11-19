@@ -196,6 +196,20 @@
     return { timers: after, entryId: entry.id, noteSaved: saved.note === note.trim(), running: saved.running };
   }
 
+  // Pause a running entry by pressing its Pause button. Matched by the button's visible
+  // text/value only — never by name, because PM's Stop button is named "stopPaused_…".
+  async function pauseEntry(timers, entryId) {
+    const box = timers.form.querySelector(`textarea[name="note_${entryId}"]`)?.closest('table.timeEntry');
+    const btn = [...(box?.querySelectorAll('button') || [])].find(b =>
+      /^\s*pause\s*$/i.test(b.textContent) || /^\s*pause\s*$/i.test(b.getAttribute('value') || ''));
+    if (!btn) throw new Error("Couldn't find PM's Pause button for this timer — pause it on the Timers page.");
+    const after = await submit(timers, {}, { name: btn.getAttribute('name'), value: btn.getAttribute('value') ?? '' });
+    if (after.entries.find(e => e.id === entryId)?.running) {
+      throw new Error('PM still shows the timer running — pause it on the Timers page.');
+    }
+    return after;
+  }
+
   // Move an entry to another project (PM's "Switch Timer").
   async function setEntryProject(entryId, projectId) {
     const timers = await getTimers();
@@ -374,6 +388,96 @@
     };
   }
 
+  // ── Which project does an email belong to? (addresses only — no AI for the client) ──
+  const FREEMAIL = new Set(['gmail.com', 'googlemail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'live.com',
+    'msn.com', 'icloud.com', 'me.com', 'mac.com', 'aol.com', 'comcast.net', 'proton.me', 'protonmail.com', 'gmx.com']);
+  const AUTOMATED = /^(no-?reply|do-?not-?reply|notifications?|mailer-daemon|postmaster|calendar-notification|bounce)/i;
+
+  function baseDomain(domain) {
+    const parts = domain.toLowerCase().split('.');
+    if (parts.length > 2 && /^(co|com|org|net|ac|gov|edu)$/.test(parts[parts.length - 2])) return parts.slice(-3).join('.');
+    return parts.slice(-2).join('.');
+  }
+
+  // Addresses outside your own domain, minus automated senders.
+  function externalAddresses(email) {
+    const own = (email.ownDomain || '').toLowerCase();
+    return [...new Set((email.addresses || []).map(a => a.toLowerCase().trim()))].filter(a => {
+      const [user, dom] = a.split('@');
+      if (!user || !dom) return false;
+      if (own && (dom === own || dom.endsWith(`.${own}`))) return false;
+      if (/(^|\.)google\.com$/.test(dom) || AUTOMATED.test(user)) return false;
+      return true;
+    });
+  }
+
+  // How strongly a project's client/site names point at an email domain.
+  function domainScore(p, domain) {
+    const base = baseDomain(domain);           // "smartvest.com"
+    const label = norm(base.split('.')[0]);    // "smartvest" ("matrix-eng" → "matrixeng")
+    let score = 0;
+    [p.client, ...p.parents, p.name].forEach(t => {
+      const low = (t || '').toLowerCase();
+      if (low.includes(base)) score = Math.max(score, 3);                           // "smartvest.com - Google Ads"
+      if (label.length >= 4 && tokens(t).some(w => w === label || (label.length >= 5 && w.startsWith(label)))) {
+        score = Math.max(score, 2);                                                  // "Electromed, Inc. (SmartVest)"
+      }
+      if (label.length >= 6 && norm(t).includes(label)) score = Math.max(score, 2); // "luckyshotspickleball.com"
+    });
+    return score;
+  }
+
+  // Returns { project, how } when confident, or { needsChoice, candidates, reason }.
+  async function resolveEmailProject(email, status) {
+    const projects = await getProjects();
+    const byId = Object.fromEntries(projects.map(p => [p.id, p]));
+    const ext = externalAddresses(email);
+    if (!ext.length) {
+      return { needsChoice: true, candidates: [], all: projects, reason: 'No client address on this email — pick the timer:' };
+    }
+
+    const { pmEmailMap = {} } = await browser.storage.local.get('pmEmailMap');
+    const votes = {};
+    const vote = (client, n) => { if (client) votes[client] = (votes[client] || 0) + n; };
+    let remembered = null;
+    ext.forEach(a => {
+      const dom = baseDomain(a.split('@')[1]);
+      const hit = pmEmailMap[`addr:${a}`] || (!FREEMAIL.has(dom) && pmEmailMap[`dom:${dom}`]);
+      if (hit && byId[hit.projectId]) { vote(byId[hit.projectId].client, 6); remembered = remembered || hit.projectId; }
+      if (!FREEMAIL.has(dom)) projects.forEach(p => vote(p.client, domainScore(p, dom)));
+    });
+
+    const ranked = Object.entries(votes).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+    const knownClient = ranked.length && (ranked.length === 1 || ranked[0][1] > ranked[1][1]) ? ranked[0][0] : null;
+    if (knownClient) {
+      const candidates = projects.filter(p => p.client === knownClient);
+      if (candidates.length === 1) return { project: candidates[0], how: `only ${knownClient} timer` };
+      let pickedId = await AI.pickEmailTimer(email, candidates).catch(() => null);
+      if (!pickedId && remembered && candidates.some(p => p.id === remembered)) pickedId = remembered;
+      if (pickedId && byId[pickedId]) return { project: byId[pickedId], how: `best fit for ${knownClient}` };
+      return { needsChoice: true, candidates, all: projects, reason: `Which ${knownClient} timer?` };
+    }
+    if (ranked.length > 1) {
+      const tied = new Set(ranked.filter(([, v]) => v === ranked[0][1]).map(([c]) => c));
+      return { needsChoice: true, candidates: projects.filter(p => tied.has(p.client)), all: projects,
+        reason: 'These addresses match more than one client — pick the timer:' };
+    }
+    return { needsChoice: true, candidates: [], all: projects,
+      reason: `No PM client matches ${ext[0].split('@')[1]} — pick the timer (it will be remembered):` };
+  }
+
+  // Remember the client for these addresses: by domain for company domains,
+  // by full address for personal (gmail.com etc.) addresses.
+  async function rememberEmailChoice(email, projectId) {
+    const { pmEmailMap = {} } = await browser.storage.local.get('pmEmailMap');
+    externalAddresses(email).forEach(a => {
+      const dom = baseDomain(a.split('@')[1]);
+      const key = FREEMAIL.has(dom) ? `addr:${a}` : `dom:${dom}`;
+      pmEmailMap[key] = { projectId: String(projectId), t: Date.now() };
+    });
+    await browser.storage.local.set({ pmEmailMap });
+  }
+
   async function rememberChoice(projectKey, projectId) {
     const { pmMap = {} } = await browser.storage.local.get('pmMap');
     pmMap[projectKey] = { projectId: String(projectId), t: Date.now() };
@@ -382,8 +486,9 @@
 
   globalThis.PM = {
     ORIGIN, PmAuthError,
-    getTimers, summarize, resumeEntry, createEntry, setEntryProject,
+    getTimers, summarize, resumeEntry, createEntry, setEntryProject, pauseEntry,
     getProjects, resolveProject, rememberChoice,
+    resolveEmailProject, rememberEmailChoice, externalAddresses,
     // exposed for tests
     _parseTimers: parseTimers, _formBody: formBody, _clientScore: clientScore,
   };

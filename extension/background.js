@@ -103,11 +103,104 @@ async function startTimer(issue, opts = {}) {
   };
 }
 
-async function switchProject(entryId, projectId, projectKey) {
+// remember: { type: 'jira', projectKey } | { type: 'email', threadId, addresses, ownDomain }
+async function switchProject(entryId, projectId, remember = {}) {
   const after = await PM.setEntryProject(entryId, projectId);
-  if (projectKey) await PM.rememberChoice(projectKey, projectId);
+  if (remember.type === 'jira' && remember.projectKey) await PM.rememberChoice(remember.projectKey, projectId);
+  if (remember.type === 'email') {
+    await PM.rememberEmailChoice(remember, projectId);
+    if (remember.threadId) await updateEmailEntry(remember.threadId, { projectId: String(projectId) });
+  }
   const projects = await PM.getProjects();
-  return { project: projects.find(p => p.id === String(projectId)), status: recordStatus(after) };
+  return {
+    project: projects.find(p => p.id === String(projectId)),
+    status: recordStatus(after),
+    emailEntries: await getEmailEntries(),
+  };
+}
+
+// ── Email (Gmail) timers ───────────────────────────────────────
+// One PM entry per Gmail thread: threadId → { entryId, projectId, note, subject, t }.
+// Kept locally so the PM note stays exactly "Correspondence with client about …".
+async function getEmailEntries() {
+  const { emailEntries = {} } = await browser.storage.local.get('emailEntries');
+  return emailEntries;
+}
+
+async function updateEmailEntry(threadId, data) {
+  const map = await getEmailEntries();
+  map[threadId] = { ...(map[threadId] || {}), ...data, t: Date.now() };
+  const keep = Object.entries(map).sort((a, b) => b[1].t - a[1].t).slice(0, 300);
+  await browser.storage.local.set({ emailEntries: Object.fromEntries(keep) });
+  return Object.fromEntries(keep);
+}
+
+// email: { threadId, subject, body, addresses, ownDomain }
+async function startEmailTimer(email, opts = {}) {
+  const status = await getStatus({ force: true });
+  const map = await getEmailEntries();
+  const known = map[email.threadId];
+
+  // 1. This thread already has a PM entry → resume it.
+  const existing = known && status.entries.find(e => e.id === known.entryId);
+  if (existing && (!opts.projectId || opts.projectId === existing.projectId)) {
+    if (existing.running) return { result: 'already-running', entry: existing, status, emailEntries: map };
+    const after = await PM.resumeEntry(await PM.getTimers(), existing.id, known.note);
+    return { result: 'resumed', entry: existing, status: recordStatus(after),
+      emailEntries: await updateEmailEntry(email.threadId, {}) };
+  }
+
+  // 2. Which project? Client from addresses only; AI picks among that client's timers.
+  const projects = await PM.getProjects();
+  let project = opts.projectId ? projects.find(p => p.id === String(opts.projectId)) : null;
+  let how = project ? 'your choice' : null;
+  if (!project) {
+    const r = await PM.resolveEmailProject(email, status);
+    if (r.needsChoice) {
+      return { result: 'choose', candidates: r.candidates, all: r.all || projects, suggestedId: null, reason: r.reason };
+    }
+    ({ project, how } = r);
+  }
+
+  // 3. Note: "Correspondence with client about …" (falls back to the bare phrase).
+  let note = opts.note;
+  let noteWarning = null;
+  if (!note) {
+    try {
+      note = await AI.generateEmailNote(email);
+    } catch (e) {
+      note = AI.EMAIL_NOTE_BASE;
+      noteWarning = `AI note unavailable (${AI.friendlyError(e)}) — used "${AI.EMAIL_NOTE_BASE}".`;
+    }
+  }
+
+  const created = await PM.createEntry(project.id, note);
+  await PM.rememberEmailChoice(email, project.id);
+  const emailEntries = await updateEmailEntry(email.threadId, {
+    entryId: created.entryId, projectId: project.id, note, subject: (email.subject || '').slice(0, 120),
+  });
+  const status2 = recordStatus(created.timers);
+  return {
+    result: 'started', project, how, note, entryId: created.entryId, emailEntries,
+    warnings: [
+      noteWarning,
+      created.noteSaved ? null : "PM didn't keep the note — add it on the Timers page.",
+      created.running ? null : "PM shows the new entry as not running — press Start on the Timers page.",
+      status2.running.length > 1 ? `${status2.running.length} timers are running in PM — pause the others.` : null,
+    ].filter(Boolean),
+    status: status2,
+  };
+}
+
+// Reply sent in a thread → pause that thread's timer if it's the one running.
+async function emailSent(threadId) {
+  const known = (await getEmailEntries())[threadId];
+  if (!known) return { paused: false };
+  const timers = await PM.getTimers();
+  const entry = timers.entries.find(e => e.id === known.entryId);
+  if (!entry?.running) return { paused: false };
+  const after = await PM.pauseEntry(timers, entry.id);
+  return { paused: true, status: recordStatus(after), emailEntries: await getEmailEntries() };
 }
 
 // ── Today's Jira tickets vs PM time ────────────────────────────
@@ -263,9 +356,11 @@ function errorPayload(e) {
 
 browser.runtime.onMessage.addListener((msg) => {
   const handlers = {
-    PM_STATUS:      () => getStatus({ force: !!msg.force }).then(status => ({ status })),
+    PM_STATUS:      async () => ({ status: await getStatus({ force: !!msg.force }), emailEntries: await getEmailEntries() }),
     PM_START:       () => startTimer(msg.issue, { projectId: msg.projectId, note: msg.note }),
-    PM_SWITCH:      () => switchProject(msg.entryId, msg.projectId, msg.projectKey),
+    PM_START_EMAIL: () => startEmailTimer(msg.email, { projectId: msg.projectId, note: msg.note }),
+    PM_EMAIL_SENT:  () => emailSent(msg.threadId),
+    PM_SWITCH:      () => switchProject(msg.entryId, msg.projectId, msg.remember),
     PM_PROJECTS:    () => PM.getProjects({ force: !!msg.force }).then(projects => ({ projects })),
     PM_OPEN:        () => browser.tabs.create({ url: `${PM.ORIGIN}/system/` }).then(() => ({})),
     TODAY_TICKETS:  () => todayTickets(),

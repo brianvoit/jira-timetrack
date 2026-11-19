@@ -19,6 +19,8 @@ const btnSaveGemini = $('btn-save-gemini');
 const btnSaveClaude = $('btn-save-claude');
 const goalInput     = $('goal-input');
 const showButtonInput = $('show-button-input');
+const showGmailInput  = $('show-gmail-input');
+const emailBodyInput  = $('email-body-input');
 const eodEnabledInput = $('eod-enabled-input');
 const eodTimeInput    = $('eod-time-input');
 const btnEodTest      = $('btn-eod-test');
@@ -103,6 +105,8 @@ saveOnChange(geminiModelInput, 'geminiModel');
 saveOnChange(claudeModelInput, 'claudeModel');
 saveOnChange(goalInput, 'dailyGoalHours', el => Number(el.value) || 7);
 showButtonInput.addEventListener('change', () => browser.storage.local.set({ showJiraButton: showButtonInput.checked }));
+showGmailInput.addEventListener('change', () => browser.storage.local.set({ showGmailButton: showGmailInput.checked }));
+emailBodyInput.addEventListener('change', () => browser.storage.local.set({ emailUseBody: emailBodyInput.checked }));
 saveOnChange(eodTimeInput, 'eodTime', el => el.value || '16:30');
 eodEnabledInput.addEventListener('change', () => browser.storage.local.set({ eodEnabled: eodEnabledInput.checked }));
 btnEodTest.addEventListener('click', () => browser.runtime.sendMessage({ type: 'EOD_TEST' }));
@@ -118,8 +122,10 @@ btnSettings.addEventListener('click', () => {
 (async () => {
   const s = await browser.storage.local.get(
     ['geminiApiKey', 'claudeApiKey', 'selectedModel', 'geminiModel', 'claudeModel', 'dailyGoalHours', 'showJiraButton',
-     'eodEnabled', 'eodTime']
+     'eodEnabled', 'eodTime', 'showGmailButton', 'emailUseBody']
   );
+  showGmailInput.checked = s.showGmailButton !== false;
+  emailBodyInput.checked = s.emailUseBody !== false;
   eodEnabledInput.checked = s.eodEnabled !== false;
   eodTimeInput.value = s.eodTime || '16:30';
   if (s.geminiApiKey) geminiInput.value = s.geminiApiKey;
@@ -203,6 +209,9 @@ async function scrape({ regenerate = false } = {}) {
   if (!tab) { showError('Could not access the current tab.'); return; }
   currentTabId = tab.id;
 
+  if (tab.url && /^https:\/\/mail\.google\.com\//.test(tab.url)) {
+    showEmptyState('On Gmail, open an email and use the ▶ Start timer button at the bottom right of the page.'); return;
+  }
   if (!tab.url || !JiraUrl.isJiraUrl(tab.url)) {
     showEmptyState('Open a Jira issue or board page first.'); return;
   }
@@ -216,6 +225,7 @@ async function scrape({ regenerate = false } = {}) {
   } catch {
     try {
       await browser.tabs.executeScript(tab.id, { file: 'lib/jira.js' });
+      await browser.tabs.executeScript(tab.id, { file: 'lib/widget.js' });
       await browser.tabs.executeScript(tab.id, { file: 'content.js' });
       data = await browser.tabs.sendMessage(tab.id, { type: 'SCRAPE_JIRA' });
     } catch { showError('Could not read the page. Try refreshing.'); return; }

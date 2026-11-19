@@ -30,12 +30,14 @@ jira-timetrack/
 ├── extension/
 │   ├── manifest.json
 │   ├── background.js         # PM timer flow, toolbar badge
-│   ├── content.js            # reads the Jira issue (REST API), "Start timer" button
+│   ├── content.js            # Jira: reads the issue (REST API), "Start timer" button
+│   ├── gmail.js              # Gmail: reads the open thread, "Start timer", pause on send
 │   ├── popup.html / popup.js # AI note, copy, Today panel, settings
 │   ├── lib/
 │   │   ├── jira.js           # URL → issue key (single source of truth)
 │   │   ├── ai.js             # Gemini / Claude calls, note + project best-fit
-│   │   └── pm.js             # pm.plaudit.com client (Timers page, project tree)
+│   │   ├── pm.js             # pm.plaudit.com client (Timers page, project tree)
+│   │   └── widget.js         # the floating Start timer panel (Jira + Gmail)
 │   └── icons/
 │       ├── icon48.png
 │       └── icon96.png
@@ -109,7 +111,14 @@ Future updates are delivered automatically — Firefox polls `updates.json` and 
 6. **Jira tickets today** (in the popup) lists every ticket you viewed or updated today — from Jira's search
    plus the tickets you opened — with its PM time today. Tickets with **no PM time** are highlighted at the top:
    **▶** opens the ticket and starts its timer, **⧉** copies its note, **×** hides it for today.
-7. **End-of-day reminder** (weekdays, default 4:30 pm, set in **···**): a notification if you're under your
+7. **Gmail:** open a client email and click **▶ Start timer** (bottom-right). The client is matched from the
+   email **addresses only** (domain → PM client/site names, choices remembered); the AI picks among that
+   client's timers from the subject and latest message. The note is always
+   `Correspondence with client about X, Y, and Z` (broad topics only). One PM entry per thread — coming
+   back to the thread resumes it. Sending a reply pauses the thread's timer. Addresses are never sent to
+   the AI; quoted history is dropped and emails/phones are redacted (turn off "Use the email's text" in
+   **···** to send the subject only).
+8. **End-of-day reminder** (weekdays, default 4:30 pm, set in **···**): a notification if you're under your
    goal or have Jira tickets without PM time.
 
 ---
