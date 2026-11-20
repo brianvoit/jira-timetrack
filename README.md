@@ -31,13 +31,13 @@ jira-timetrack/
 │   ├── manifest.json
 │   ├── background.js         # PM timer flow, toolbar badge
 │   ├── content.js            # Jira: reads the issue (REST API), "Start timer" button
-│   ├── gmail.js              # Gmail: reads the open thread, "Start timer", pause on send
+│   ├── gmail.js              # Gmail: reads the open thread, round timer button in the reply row, pause on send
 │   ├── popup.html / popup.js # AI note, copy, Today panel, settings
 │   ├── lib/
 │   │   ├── jira.js           # URL → issue key (single source of truth)
 │   │   ├── ai.js             # Gemini / Claude calls, note + project best-fit
 │   │   ├── pm.js             # pm.plaudit.com client (Timers page, project tree)
-│   │   └── widget.js         # the floating Start timer panel (Jira + Gmail)
+│   │   └── widget.js         # the floating Start timer panel (Jira; Gmail shows it only for messages)
 │   └── icons/
 │       ├── icon48.png
 │       └── icon96.png
@@ -114,7 +114,7 @@ Future updates are delivered automatically — Firefox polls `updates.json` and 
    `Description (MARY-53)`, or `Description (MARY-60, MARY-61)` when one entry covers several. Existing notes are
    never changed; blank entries with no matching ticket are left and listed. **Fill N blank timers** in the
    popup's Today card does it on demand. **Jira tickets today** lists what you touched with its PM time.
-7. **Gmail:** open a client email and click **▶ Start timer** (bottom-right). The client is matched from the
+7. **Gmail:** open a client email and click the round **⏱** button next to Reply all / Reply / Forward (it turns green while timing; click again to pause). The client is matched from the
    email **addresses only** (domain → PM client/site names, choices remembered); the AI picks among that
    client's timers from the subject and latest message. The note is always
    `Correspondence with client about X, Y, and Z` (broad topics only). One PM entry per thread — coming

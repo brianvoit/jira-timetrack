@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Jira Time Helper",
-  "version": "3.5",
+  "version": "3.6",
   "description": "Starts the right pm.plaudit.com timer from a Jira ticket or a client email in Gmail, with an AI-written note.",
   "icons": {
     "48": "icons/icon48.png",

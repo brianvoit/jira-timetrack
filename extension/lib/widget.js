@@ -7,7 +7,11 @@
 //   startMessage(payload, opts)  → runtime message that starts the timer ({ projectId?, note? } in opts)
 //   runningFor(status, key, ctx) → the running PM timer for this key, or null (ctx = extras from background)
 //   remember(payload)            → what the background should remember when the user changes the timer
+//   compact()                    → optional; true = the page has its own start button (Gmail's reply row),
+//                                  so the panel only pops up for messages and the timer picker
 // }
+// Returns { sync, start, pause, refreshStatus, notify, onChange(cb) } — onChange gets
+// { key, busy, running } whenever the state changes, for a page-native button.
 (() => {
   if (globalThis.TimerWidget) return;
 
@@ -116,7 +120,10 @@
       width: 36px; height: 36px; border-radius: 50%;
       background: var(--pm-accent); color: var(--pm-on-accent); font-size: 15px; box-shadow: var(--pm-primary-shadow);
     }
-    .dot.running { background: var(--pm-success); }`;
+    .dot.running { background: var(--pm-success); }
+    .title { flex: 1; padding-left: 2px; font-size: 12px; font-weight: 600; color: var(--pm-text-2); }
+    .box:not(.compact) .title, .box.compact .row > .start { display: none; }
+    .box.compact .meta { padding-bottom: 8px; }`;
 
 
   function createWidget(adapter) {
@@ -149,6 +156,7 @@
     <div class="box">
       <div class="full">
         <div class="row">
+          <span class="title">PM timer</span>
           <button class="start">▶ Start timer</button>
           <button class="icon min-btn" title="Minimize">–</button>
         </div>
@@ -174,12 +182,44 @@
         search: q('input[type=search]'), list: q('.list'), confirm: q('.confirm'), cancel: q('.cancel'),
       };
       els.start.addEventListener('click', () => start());
-      els.min.addEventListener('click', () => setMinimized(true));
+      els.min.addEventListener('click', () => (compact() ? close() : setMinimized(true)));
+      els.box.addEventListener('mouseenter', () => clearTimeout(hideTimer));
+      els.box.addEventListener('mouseleave', () => scheduleHide(4000));
       els.dot.addEventListener('click', () => setMinimized(false));
       els.cancel.addEventListener('click', () => hideChooser());
       document.documentElement.appendChild(host);
-      browser.storage.local.get('widgetMinimized').then(s => setMinimized(!!s.widgetMinimized, false));
+      browser.storage.local.get('widgetMinimized').then(s => { if (!compact()) setMinimized(!!s.widgetMinimized, false); });
     }
+
+    // ── Compact mode (page has its own button): show the panel only when it has something to say ──
+    const compact = () => !!adapter.compact?.();
+    let hideTimer = null;
+    const hasContent = () => !els.msg.classList.contains('hidden') || !els.choose.classList.contains('hidden');
+    function updateVisibility() {
+      if (!host) return;
+      const c = compact();
+      els.box.classList.toggle('compact', c);
+      els.min.textContent = c ? '×' : '–';
+      els.min.title = c ? 'Close' : 'Minimize';
+      if (c && els.full.classList.contains('hidden')) {
+        els.full.classList.remove('hidden'); els.dot.classList.add('hidden'); els.box.classList.remove('min');
+      }
+      host.style.display = currentKey && (!c || hasContent()) ? '' : 'none';
+    }
+    // Confirmations close themselves in compact mode; errors and the picker stay until closed.
+    function scheduleHide(ms = 9000) {
+      clearTimeout(hideTimer);
+      if (!els || !compact() || !els.choose.classList.contains('hidden') || !els.msg.classList.contains('ok')) return;
+      hideTimer = setTimeout(close, ms);
+    }
+    function close() { clearTimeout(hideTimer); clearMsg(); hideChooser(); }
+
+    const listeners = [];
+    function emit() {
+      const state = { key: currentKey, busy, running: runningHere() };
+      listeners.forEach(cb => { try { cb(state); } catch { /* page button gone */ } });
+    }
+    function onChange(cb) { listeners.push(cb); cb({ key: currentKey, busy, running: runningHere() }); }
 
     function setMinimized(min, save = true) {
       els.full.classList.toggle('hidden', min);
@@ -197,8 +237,9 @@
         a.addEventListener('click', link.onClick);
         els.msg.appendChild(a);
       }
+      updateVisibility(); scheduleHide();
     }
-    const clearMsg = () => { els.msg.className = 'msg hidden'; els.msg.textContent = ''; };
+    const clearMsg = () => { els.msg.className = 'msg hidden'; els.msg.textContent = ''; updateVisibility(); };
 
     function runningHere() {
       return status && currentKey ? adapter.runningFor(status, currentKey, ctx) || null : null;
@@ -232,8 +273,9 @@
       }
       els.dot.classList.toggle('running', !!here);
       els.box.classList.toggle('is-running', !!here);
+      emit();
       const runaway = status.running.find(r => r.runaway);
-      if (runaway && !busy && els.msg.classList.contains('hidden')) {
+      if (runaway && !busy && !compact() && els.msg.classList.contains('hidden')) {
         showMsg(`A timer has been running since ${new Date(runaway.startedAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}: ${runaway.note || runaway.projectName}.`, 'warn', openPm);
       }
     }
@@ -248,7 +290,7 @@
       } else {
         status = null;
         els.meta.textContent = res?.signIn ? '' : 'PM status unavailable.';
-        if (res?.signIn) showMsg('Sign in to PM to start timers.', 'warn', openPm);
+        if (res?.signIn && !compact()) showMsg('Sign in to PM to start timers.', 'warn', openPm);
       }
     }
 
@@ -256,15 +298,15 @@
       busy = on;
       els.start.disabled = on;
       if (on) els.start.textContent = label;
+      emit();
     }
 
     async function start({ projectId, note } = {}) {
       if (busy) return;
       currentKey = adapter.currentKey(); // so sync() doesn't reset the panel mid-start
       if (!host) { build(); refreshStatus(); }
-      host.style.display = '';
-      setMinimized(false, false);
       clearMsg(); hideChooser();
+      if (!compact()) { host.style.display = ''; setMinimized(false, false); }
       setBusy(true, 'Reading…');
       try {
         payload = await adapter.read();
@@ -312,6 +354,7 @@
         d.className = 'msg warn'; d.style.padding = '4px 0 0'; d.textContent = w;
         els.msg.appendChild(d);
       });
+      updateVisibility(); scheduleHide();
     }
 
     // ── Project picker ──
@@ -325,8 +368,9 @@
       els.search.oninput = renderList;
       els.confirm.textContent = res.switchEntryId ? 'Move to this timer' : 'Start on this timer';
       els.confirm.onclick = confirmChoice;
+      clearTimeout(hideTimer); updateVisibility();
     }
-    function hideChooser() { if (els) els.choose.classList.add('hidden'); chooser = null; }
+    function hideChooser() { if (els) { els.choose.classList.add('hidden'); updateVisibility(); } chooser = null; }
 
     function renderList() {
       if (!chooser) return;
@@ -371,12 +415,32 @@
     // Show when something is open, hide otherwise; Jira and Gmail change URLs without reloading.
     function sync() {
       const key = adapter.currentKey();
-      if (key === currentKey) return;
+      if (key === currentKey) { updateVisibility(); return; }
       currentKey = key;
       if (!host) { if (!key) return; build(); refreshStatus(); }
-      host.style.display = key ? '' : 'none';
       clearMsg(); hideChooser();
       renderMeta();
+    }
+
+    // Pause this page's running timer (the page-native button, clicked while running).
+    async function pause() {
+      const here = runningHere();
+      if (!here || busy) return;
+      setBusy(true, 'Pausing…');
+      try {
+        const res = await send({ type: 'PM_PAUSE', entryId: here.id });
+        takeExtras(res);
+        if (res.error) showMsg(res.error, 'err', res.signIn ? openPm : null);
+        else {
+          if (res.status) status = await withGoal(res.status);
+          showMsg(`Paused: ${here.note || here.projectName}`, 'ok');
+        }
+      } catch (e) {
+        showMsg(e.message || String(e), 'err');
+      } finally {
+        setBusy(false);
+        renderMeta();
+      }
     }
 
     // For messages from outside the widget (e.g. Gmail: "paused after sending").
@@ -388,7 +452,7 @@
       renderMeta();
     }
 
-    return { sync, start, refreshStatus, notify };
+    return { sync, start, pause, refreshStatus, notify, onChange };
   }
 
   globalThis.TimerWidget = { createWidget };

@@ -201,6 +201,14 @@ async function emailSent(threadId) {
   return { paused: true, status: recordStatus(after), emailEntries: await getEmailEntries() };
 }
 
+// Pause one running entry (Gmail's round timer button, clicked while running).
+async function pauseTimer(entryId) {
+  const timers = await PM.getTimers();
+  if (!timers.entries.find(e => e.id === entryId)?.running) return { paused: false, status: recordStatus(timers) };
+  const after = await PM.pauseEntry(timers, entryId);
+  return { paused: true, status: recordStatus(after), emailEntries: await getEmailEntries() };
+}
+
 // ── Today's Jira tickets vs PM time ────────────────────────────
 const pad2 = n => String(n).padStart(2, '0');
 function localDay(d = new Date()) {
@@ -551,6 +559,7 @@ browser.runtime.onMessage.addListener((msg) => {
     PM_START:       () => startTimer(msg.issue, { projectId: msg.projectId, note: msg.note }),
     PM_START_EMAIL: () => startEmailTimer(msg.email, { projectId: msg.projectId, note: msg.note }),
     PM_EMAIL_SENT:  () => emailSent(msg.threadId),
+    PM_PAUSE:       () => pauseTimer(msg.entryId),
     PM_SWITCH:      () => switchProject(msg.entryId, msg.projectId, msg.remember),
     PM_PROJECTS:    () => PM.getProjects({ force: !!msg.force }).then(projects => ({ projects })),
     PM_OPEN:        () => browser.tabs.create({ url: `${PM.ORIGIN}/system/` }).then(() => ({})),
