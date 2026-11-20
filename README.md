@@ -106,7 +106,7 @@ Future updates are delivered automatically — Firefox polls `updates.json` and 
 3. Open a Jira issue and click **▶ Start timer** (bottom-right of the page), or **▶ Start PM timer** in the popup
    (the popup lets you edit the note first).
 4. The toolbar badge shows the running timer's elapsed time, or **!** if a timer has been running too long.
-5. The popup's **Today** panel shows billable hours against your daily goal (default 7 h, set in **···**)
+5. The popup's **Today** panel shows hours logged today (every timer, billable or not) against your daily goal (default 6.5 h, set in **···**)
    and flags runaway timers and entries without notes.
 6. **Blank PM timers get filled in.** Start timers straight in PM without a note if you like: at the end of
    the day (default 4:30 pm, set in **···**) the extension writes a note on each of today's blank entries
@@ -123,6 +123,10 @@ Future updates are delivered automatically — Firefox polls `updates.json` and 
    **···** to send the subject only).
 8. **End of day** (weekdays): fills blank timers, then one notification with what was filled, anything left
    blank, and today's hours vs your goal.
+9. **Timers left running after hours get paused** (weekdays, default 5:00 pm, set in **···**). A timer that was already
+   running before then is paused (PM's Pause button) once today's total reaches your daily goal, with a warning 5 minutes
+   ahead. Click the warning to keep it running tonight. Timers you start after 5:00 are left alone. A timer still
+   running from a past day is paused as soon as Firefox sees it, and the notification says how much to trim in PM.
 
 ---
 

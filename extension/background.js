@@ -275,7 +275,7 @@ async function todayTickets() {
     tickets,
     jiraAvailable: jira.ok,
     pmAvailable: !!status,
-    todayBillableHours: status?.todayBillableHours ?? null,
+    todayHours: status?.todayHours ?? null,
   };
 }
 
@@ -391,8 +391,8 @@ async function endOfDayCheck({ force = false } = {}) {
   try { fill = await fillBlankEntries(); } catch (e) { fillError = e.message || String(e); }
 
   const { dailyGoalHours } = await browser.storage.local.get('dailyGoalHours');
-  const goal = Number(dailyGoalHours) || 7;
-  const hours = statusCache?.status?.todayBillableHours ?? null;
+  const goal = Number(dailyGoalHours) || 6.5;
+  const hours = statusCache?.status?.todayHours ?? null;
   const under = hours != null && hours < goal;
   if (!force && !fill.filled.length && !fill.left.length && !under && !fillError) return;
 
@@ -420,6 +420,122 @@ browser.storage.onChanged.addListener((changes) => {
   if (changes.eodEnabled || changes.eodTime) scheduleEod();
 });
 scheduleEod();
+
+// ── Pause timers left running after hours ──────────────────────
+// After the cutoff (default 5:00 pm, weekdays), a timer that was already running before
+// the cutoff is paused once today's total reaches the daily goal. Timers started after
+// the cutoff are deliberate late work and are left alone (so is a timer resumed after an
+// auto-pause). A warning comes 5 minutes ahead; clicking it keeps today's timers running.
+// Only works while Firefox is open: a pause after sleep is recorded by PM at that moment.
+const PAUSE_AFTER_DEFAULT = '17:00';
+const PAUSE_WARN_MS = 5 * 60 * 1000;
+const pauseHandled = new Set(); // "<entryId>@<startedAt>" already warned / paused / failed
+const pauseWarned  = new Set();
+
+function cutoffOn(ms, time) {
+  const [h, m] = String(time || PAUSE_AFTER_DEFAULT).split(':').map(Number);
+  const d = new Date(ms); d.setHours(h ?? 17, m || 0, 0, 0);
+  return d.getTime();
+}
+const isWeekday = ms => ![0, 6].includes(new Date(ms).getDay());
+const segKey = r => `${r.id}@${r.startedAt}`;
+const fmtClock = ms => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+
+// When each covered running timer should be paused. Today's total grows by one minute
+// per minute for every running timer (covered or not).
+function pausePlan(status, goalHours, time, now = Date.now()) {
+  const running = (status?.running || []).filter(r => r.startedAt);
+  if (!running.length) return [];
+  const midnight = new Date(now); midnight.setHours(0, 0, 0, 0);
+  const loggedMs = (status.todayHours || 0) * 3600e3 + running.length * Math.max(0, now - status.fetchedAt);
+  const reachesGoal = now + (goalHours * 3600e3 - loggedMs) / running.length;
+  return running.flatMap(r => {
+    const cut = cutoffOn(r.startedAt, time);
+    if (!isWeekday(r.startedAt) || r.startedAt >= cut) return []; // started after hours: leave it
+    if (r.startedAt < midnight.getTime()) return [{ r, due: cut, overnight: true }]; // left on since a past day
+    return [{ r, due: Math.max(cut, reachesGoal), overnight: false }];
+  });
+}
+
+async function autoPauseCheck() {
+  const { autoPause = true, pauseAfter = PAUSE_AFTER_DEFAULT, autoPauseSkip = null, dailyGoalHours } =
+    await browser.storage.local.get(['autoPause', 'pauseAfter', 'autoPauseSkip', 'dailyGoalHours']);
+  if (!autoPause || !statusCache) return;
+  const goal = Number(dailyGoalHours) || 6.5;
+  const wanted = p => !pauseHandled.has(segKey(p.r)) && localDay(new Date(p.r.startedAt)) !== autoPauseSkip;
+
+  let plan = pausePlan(statusCache.status, goal, pauseAfter).filter(wanted);
+  if (!plan.length || Math.min(...plan.map(p => p.due)) - Date.now() > PAUSE_WARN_MS) return;
+
+  // Close to (or past) due: re-read PM — the timer may have been paused or switched there.
+  const anyDue = plan.some(p => p.due <= Date.now());
+  const status = await getStatus({ force: anyDue });
+  const now = Date.now();
+  plan = pausePlan(status, goal, pauseAfter, now).filter(wanted);
+  const due = plan.filter(p => p.due <= now);
+
+  if (!due.length) {
+    const soon = plan.filter(p => !pauseWarned.has(segKey(p.r)));
+    if (!soon.length) return;
+    soon.forEach(p => pauseWarned.add(segKey(p.r)));
+    const at = Math.min(...soon.map(p => p.due));
+    await browser.notifications.create('autopause-warn', {
+      type: 'basic',
+      iconUrl: browser.runtime.getURL('icons/icon96.png'),
+      title: `Pausing PM timer at ${fmtClock(at)}`,
+      message: `${soon.map(p => p.r.note || p.r.projectName).join('; ')} — today will have ${goal} h logged. ` +
+        'Click this to keep it running tonight.',
+    });
+    return;
+  }
+
+  let timers = await PM.getTimers();
+  const paused = [], failed = [];
+  for (const p of due) {
+    pauseHandled.add(segKey(p.r));
+    try { timers = await PM.pauseEntry(timers, p.r.id); paused.push(p); }
+    catch (e) { failed.push({ ...p, error: e.message || String(e) }); }
+  }
+  let after = recordStatus(timers);
+
+  // A blank timer gets its note now rather than waiting for tomorrow's end-of-day run.
+  let filled = [];
+  if (paused.some(p => !p.r.note)) {
+    try { filled = (await fillBlankEntries()).filled; after = statusCache?.status || after; } catch { /* leave blank */ }
+  }
+
+  const parts = [];
+  if (paused.length) {
+    parts.push(`Paused ${paused.map(p => p.r.note || p.r.projectName).join('; ')}. ` +
+      `${(after.todayHours || 0).toFixed(1)} h logged today.`);
+    paused.forEach(p => {
+      if (p.overnight) parts.push(`It had been running since ${new Date(p.r.startedAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })} — trim the extra time in PM.`);
+      else if (now - p.due > 10 * 60 * 1000) parts.push(`It ran ${formatElapsed(now - p.due)} past ${fmtClock(p.due)} while Firefox was closed or asleep — trim that in PM.`);
+    });
+  }
+  filled.forEach(f => parts.push(`Note added: ${f.note}`));
+  failed.forEach(f => parts.push(`Couldn't pause ${f.r.note || f.r.projectName}: ${f.error}`));
+  await browser.notifications.clear('autopause-warn');
+  await browser.notifications.create('autopause', {
+    type: 'basic',
+    iconUrl: browser.runtime.getURL('icons/icon96.png'),
+    title: failed.length && !paused.length ? "Couldn't pause PM timer" : 'Paused PM timer for the day',
+    message: parts.join(' '),
+  });
+}
+
+// Clicking the warning keeps timers started today running tonight.
+browser.notifications.onClicked.addListener(async (id) => {
+  if (id !== 'autopause-warn') return;
+  await browser.storage.local.set({ autoPauseSkip: localDay() });
+  await browser.notifications.clear('autopause-warn');
+  await browser.notifications.create('autopause', {
+    type: 'basic',
+    iconUrl: browser.runtime.getURL('icons/icon96.png'),
+    title: 'Timer keeps running',
+    message: "Today's timers won't be paused automatically. Remember to pause it in PM.",
+  });
+});
 
 // ── Messages from the content script and popup ────────────────
 function errorPayload(e) {
@@ -465,4 +581,5 @@ browser.alarms.onAlarm.addListener(async (alarm) => {
   } else if (statusCache) {
     updateBadge(statusCache.status);
   }
+  await autoPauseCheck().catch(() => {});
 });

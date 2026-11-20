@@ -129,11 +129,11 @@
     };
     const send = (m) => browser.runtime.sendMessage(m);
     const openPm = { label: 'Open PM', onClick: () => send({ type: 'PM_OPEN' }) };
-    const goal = () => status?.goalHours || 7;
+    const goal = () => status?.goalHours || 6.5;
 
     async function withGoal(s) {
       const { dailyGoalHours } = await browser.storage.local.get('dailyGoalHours');
-      return { ...s, goalHours: Number(dailyGoalHours) || 7 };
+      return { ...s, goalHours: Number(dailyGoalHours) || 6.5 };
     }
     function takeExtras(res) { if (res?.emailEntries) ctx = { ...ctx, emailEntries: res.emailEntries }; }
 
@@ -209,7 +209,7 @@
       if (!els) return;
       els.meta.textContent = '';
       if (!status) { els.meta.textContent = 'PM: checking…'; return; }
-      const today = status.todayBillableHours;
+      const today = status.todayHours;
       const line = document.createElement('div');
       line.append('Today ');
       const b = document.createElement('b'); b.textContent = `${fmtHours(today)} / ${goal()} h`; line.append(b);

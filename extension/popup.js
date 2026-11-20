@@ -24,6 +24,8 @@ const emailBodyInput  = $('email-body-input');
 const eodEnabledInput = $('eod-enabled-input');
 const eodTimeInput    = $('eod-time-input');
 const btnEodTest      = $('btn-eod-test');
+const autoPauseInput  = $('autopause-enabled-input');
+const pauseAfterInput = $('autopause-time-input');
 const noKeyWarn     = $('no-key-warn');
 const loading       = $('loading');
 const fieldsEl      = $('fields');
@@ -101,12 +103,14 @@ function saveOnChange(inputEl, storageKey, read = el => el.value.trim()) {
 
 saveOnChange(geminiModelInput, 'geminiModel');
 saveOnChange(claudeModelInput, 'claudeModel');
-saveOnChange(goalInput, 'dailyGoalHours', el => Number(el.value) || 7);
+saveOnChange(goalInput, 'dailyGoalHours', el => Number(el.value) || 6.5);
 showButtonInput.addEventListener('change', () => browser.storage.local.set({ showJiraButton: showButtonInput.checked }));
 showGmailInput.addEventListener('change', () => browser.storage.local.set({ showGmailButton: showGmailInput.checked }));
 emailBodyInput.addEventListener('change', () => browser.storage.local.set({ emailUseBody: emailBodyInput.checked }));
 saveOnChange(eodTimeInput, 'eodTime', el => el.value || '16:30');
 eodEnabledInput.addEventListener('change', () => browser.storage.local.set({ eodEnabled: eodEnabledInput.checked }));
+saveOnChange(pauseAfterInput, 'pauseAfter', el => el.value || '17:00');
+autoPauseInput.addEventListener('change', () => browser.storage.local.set({ autoPause: autoPauseInput.checked }));
 btnEodTest.addEventListener('click', () => browser.runtime.sendMessage({ type: 'EOD_TEST' }));
 
 btnSettings.addEventListener('click', () => {
@@ -120,17 +124,19 @@ btnSettings.addEventListener('click', () => {
 (async () => {
   const s = await browser.storage.local.get(
     ['geminiApiKey', 'claudeApiKey', 'selectedModel', 'geminiModel', 'claudeModel', 'dailyGoalHours', 'showJiraButton',
-     'eodEnabled', 'eodTime', 'showGmailButton', 'emailUseBody']
+     'eodEnabled', 'eodTime', 'showGmailButton', 'emailUseBody', 'autoPause', 'pauseAfter']
   );
   showGmailInput.checked = s.showGmailButton !== false;
   emailBodyInput.checked = s.emailUseBody !== false;
   eodEnabledInput.checked = s.eodEnabled !== false;
   eodTimeInput.value = s.eodTime || '16:30';
+  autoPauseInput.checked = s.autoPause !== false;
+  pauseAfterInput.value = s.pauseAfter || '17:00';
   if (s.geminiApiKey) geminiInput.value = s.geminiApiKey;
   if (s.claudeApiKey) claudeInput.value = s.claudeApiKey;
   if (s.geminiModel)  geminiModelInput.value = s.geminiModel;
   if (s.claudeModel)  claudeModelInput.value = s.claudeModel;
-  goalInput.value = s.dailyGoalHours || 7;
+  goalInput.value = s.dailyGoalHours || 6.5;
   showButtonInput.checked = s.showJiraButton !== false;
   if (s.selectedModel) {
     selectedModel = s.selectedModel;
@@ -318,7 +324,7 @@ async function loadPmStatus() {
     browser.runtime.sendMessage({ type: 'PM_STATUS' }).catch(e => ({ error: String(e) })),
     browser.storage.local.get('dailyGoalHours'),
   ]);
-  const goal = Number(dailyGoalHours) || 7;
+  const goal = Number(dailyGoalHours) || 6.5;
 
   if (!res?.status) {
     const d = pmLine(res?.signIn ? 'PM: not signed in. ' : `PM: ${res?.error || 'unavailable'}`, 'pm-line muted');
@@ -331,7 +337,7 @@ async function loadPmStatus() {
     return;
   }
   const s = res.status;
-  const today = s.todayBillableHours;
+  const today = s.todayHours;
   pmRunning = s.running || [];
   updateEntryCard();
 

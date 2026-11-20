@@ -300,7 +300,8 @@
     });
 
     return {
-      todayBillableHours: timers.report['total billable']?.[0] ?? null,
+      // Every timer's time today (running ones up to now), billable or not.
+      todayHours: timers.entries.reduce((sum, e) => sum + today(e).minutes, 0) / 60,
       running,
       emptyNotesToday,
       minutesByKey,

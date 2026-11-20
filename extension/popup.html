@@ -387,6 +387,11 @@
       <input class="key-input time-input" id="eod-time-input" type="time" step="900" />
       <button class="check-update-btn" id="btn-eod-test" title="Fill blank timers and show the end-of-day summary now">Run now</button>
     </div>
+    <div class="setting-row">
+      <label class="setting-row inline"><input type="checkbox" id="autopause-enabled-input" /> Pause timers after</label>
+      <input class="key-input time-input" id="autopause-time-input" type="time" step="900" />
+    </div>
+    <p class="settings-hint">Weekdays: a timer still running from before this time is paused once today reaches your daily goal. Timers you start later keep running.</p>
   </div>
 
   <!-- Version / update check -->
