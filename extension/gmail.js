@@ -11,22 +11,34 @@
 
   const BODY_LIMIT = 1500;
 
-  // Gmail URLs look like #inbox/FMfcgzQ…, #label/Clients/FMfcg…, #search/foo/FMfcg….
-  // The thread id is the last segment when a thread is open ("#inbox" or "#inbox/p2" are lists).
+  // The open conversation is found on the page, not in the URL: with Gmail's reading pane
+  // (split view) the URL stays "#inbox" while a thread is open beside the list.
+  const visible = el => el.offsetParent !== null;
+
+  function subjectEl() {
+    return [...document.querySelectorAll('h2.hP, h2[data-thread-perm-id], h2[data-legacy-thread-id]')].find(visible) || null;
+  }
+
+  // Smallest container holding the subject and the message bodies — the conversation only,
+  // never the email list next to it (whose sender addresses must not be read).
+  function threadRoot() {
+    let el = subjectEl();
+    while (el && el !== document.body && !el.querySelector('div.a3s')) el = el.parentElement;
+    return el && el !== document.body ? el : null;
+  }
+
+  // Thread id: Gmail's own id on the subject, else the last URL segment (#inbox/FMfcgzQ…).
   function threadIdFromUrl() {
     const parts = location.hash.replace(/^#/, '').split('?')[0].split('/');
     const last = parts[parts.length - 1];
     return parts.length >= 2 && /^[A-Za-z0-9_-]{16,}$/.test(last) ? last : null;
   }
 
-  function main() {
-    return document.querySelector('div[role="main"]') || document.body;
-  }
-
-  // An open thread = thread id in the URL and a subject on screen.
   function openThreadId() {
-    const id = threadIdFromUrl();
-    return id && main().querySelector('h2.hP, h2[data-thread-perm-id]') ? id : null;
+    const h2 = subjectEl();
+    if (!h2) return null;
+    const own = h2.getAttribute('data-thread-perm-id') || h2.getAttribute('data-legacy-thread-id');
+    return (own && own.replace(/^#/, '')) || threadIdFromUrl();
   }
 
   function ownAddress() {
@@ -43,7 +55,7 @@
 
   // Text of the latest expanded message, without quoted history or signature.
   function latestMessageText() {
-    const bodies = [...main().querySelectorAll('div.a3s')].filter(el => el.offsetParent !== null);
+    const bodies = [...(threadRoot()?.querySelectorAll('div.a3s') || [])].filter(visible);
     const last = bodies[bodies.length - 1];
     if (!last) return '';
     const clone = last.cloneNode(true);
@@ -61,8 +73,9 @@
   async function readEmail() {
     const threadId = openThreadId();
     if (!threadId) throw new Error('Open an email thread first.');
-    const m = main();
-    const subject = (m.querySelector('h2.hP, h2[data-thread-perm-id]')?.textContent || document.title.split(' - ')[0]).trim();
+    const m = threadRoot();
+    if (!m) throw new Error('Open an email thread first.');
+    const subject = (subjectEl()?.textContent || document.title.split(' - ')[0]).trim();
     const addresses = [...new Set([...m.querySelectorAll('[email]')].map(el => el.getAttribute('email')).filter(Boolean))];
     const own = ownAddress();
     const { emailUseBody } = await browser.storage.local.get('emailUseBody');
@@ -102,13 +115,22 @@
   let inline = null;      // { host, btn }
   let inlineThread = null; // thread whose reply row has had the button (→ compact panel)
   let inlineState = { busy: false, running: null };
+  let seenThread = null, seenAt = 0; // when the current thread was first seen
 
   function replyRow() {
-    const visible = el => el.offsetParent !== null;
-    const rows = [...main().querySelectorAll('.amn')].filter(visible);
-    if (rows.length) return rows[rows.length - 1];
+    let root = threadRoot();
+    if (!root) return null;
+    // The reply row can sit just outside the messages' container: look a few levels up,
+    // but never as far as a container that also holds the email list (tr.zA rows).
+    for (let i = 0; i < 4 && root; i++, root = root.parentElement) {
+      if (root.querySelector('tr.zA')) break;
+      // Gmail also has an empty .amn inside each message; only the one with buttons counts.
+      const rows = [...root.querySelectorAll('.amn')].filter(r => visible(r) && r.querySelector('.ams, [role="link"], [role="button"]'));
+      if (rows.length) return rows[rows.length - 1];
+    }
+    root = threadRoot();
     // Fallback: the parent of the last visible "Forward" control that also holds "Reply".
-    const fwd = [...main().querySelectorAll('[role="link"], [role="button"], button')]
+    const fwd = [...root.querySelectorAll('[role="link"], [role="button"], button')]
       .filter(el => visible(el) && /^forward$/i.test(el.textContent.trim()));
     const last = fwd[fwd.length - 1];
     return last && /reply/i.test(last.parentElement?.textContent || '') ? last.parentElement : null;
@@ -187,7 +209,13 @@
   };
 
   const widget = TimerWidget.createWidget({
-    compact: () => !!openThreadId() && inlineThread === openThreadId(),
+    // Give Gmail a few seconds to draw the reply row before falling back to the floating panel.
+    compact: () => {
+      const id = openThreadId();
+      if (!id) return false;
+      if (id !== seenThread) { seenThread = id; seenAt = Date.now(); }
+      return inlineThread === id || Date.now() - seenAt < 3000;
+    },
     currentKey: openThreadId,
     label: () => 'this email',
     read: readEmail,
